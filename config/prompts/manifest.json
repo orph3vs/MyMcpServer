@@ -1,0 +1,9 @@
+{
+  "default_version": "v1",
+  "versions": {
+    "v1": {
+      "system_prompt": "config/prompts/v1/system_prompt.md",
+      "orchestration_prompt": "config/prompts/v1/orchestration_prompt.md"
+    }
+  }
+}
