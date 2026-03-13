@@ -58,6 +58,8 @@ curl -X POST http://localhost:8000/ask \
 
 
 ## 5) Tool 엔드포인트 확인(선택)
+Git Bash에서는 줄바꿈에 `` ` `` 대신 `\`를 사용합니다.
+
 ```bash
 curl -X POST http://localhost:8000/tools/search_law \
   -H "Content-Type: application/json" \
@@ -72,3 +74,10 @@ curl "http://localhost:8000/logs/recent?limit=5"
 정상 기준:
 - `tools/*`는 `{"data": ...}` 형태
 - `/logs/recent`는 `{"count": n, "items": [...]}` 형태
+
+PowerShell 예시:
+```powershell
+curl -X POST http://localhost:8000/tools/get_article `
+  -H "Content-Type: application/json" `
+  -d '{"law_id":"011357","article_no":"제1조"}'
+```

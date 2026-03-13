@@ -1,6 +1,11 @@
+import json
 import unittest
+from pathlib import Path
 
 from src.nlic_api_wrapper import NlicApiWrapper
+
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "nlic"
 
 
 class FakeNlicApiWrapper(NlicApiWrapper):
@@ -64,6 +69,52 @@ class BlankHistoryFakeNlicApiWrapper(FakeNlicApiWrapper):
         return super()._request(params, endpoint_url=endpoint_url)
 
 
+class EmptyHistoryFakeNlicApiWrapper(FakeNlicApiWrapper):
+    def _request(self, params, endpoint_url=None):
+        if params.get("target") == "history":
+            return {"versions": []}
+        return super()._request(params, endpoint_url=endpoint_url)
+
+
+class LiveFixtureNlicApiWrapper(NlicApiWrapper):
+    def __init__(self):
+        super().__init__(oc="test_oc", cache_ttl_seconds=300)
+
+    @staticmethod
+    def _load_fixture(name: str):
+        return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
+
+    def _request(self, params, endpoint_url=None):
+        target = params.get("target")
+
+        if target == "law" and params.get("query") == "개인정보보호법":
+            return self._load_fixture("search_law_privacy_act.json")
+
+        if target == "history" and params.get("ID") == "011357":
+            return {"raw": "   "}
+
+        if target == "law" and params.get("ID") == "011357" and not params.get("JO"):
+            return self._load_fixture("get_version_011357_law.json")
+
+        if (
+            endpoint_url == self.service_url
+            and target == "law"
+            and params.get("ID") == "011357"
+            and params.get("JO") in ("제1조", "000100")
+        ):
+            return self._load_fixture("get_article_011357_제1조.json")
+
+        if (
+            endpoint_url == self.service_url
+            and target == "lawjosub"
+            and params.get("ID") == "011357"
+            and params.get("JO") == "제1조"
+        ):
+            return {"raw": "   "}
+
+        return {}
+
+
 class NlicApiWrapperTests(unittest.TestCase):
     def test_search_law_and_cache(self):
         api = FakeNlicApiWrapper()
@@ -75,8 +126,8 @@ class NlicApiWrapperTests(unittest.TestCase):
 
     def test_get_article_and_validate_article(self):
         api = FakeNlicApiWrapper()
-        article = api.get_article("L1", "제1조")
-        validated = api.validate_article("L1", "제1조")
+        article = api.get_article("L1", " 제1조 ")
+        validated = api.validate_article(" L1 ", " 제1조 ")
 
         self.assertEqual(article["law_id"], "L1")
         self.assertEqual(article["article_no"], "제1조")
@@ -86,6 +137,8 @@ class NlicApiWrapperTests(unittest.TestCase):
         self.assertEqual(article["matched_via"], "service:law:mst")
         self.assertGreater(len(article["attempted_queries"]), 0)
         self.assertTrue(validated["is_valid"])
+        self.assertEqual(validated["law_id"], "L1")
+        self.assertEqual(validated["article_no"], "제1조")
 
     def test_article_no_candidates_include_official_jo_code(self):
         self.assertEqual(
@@ -112,6 +165,39 @@ class NlicApiWrapperTests(unittest.TestCase):
         self.assertEqual(versions["source_target"], "law_fallback")
         self.assertEqual(versions["version_fields"]["시행일자"], "2025-01-01")
         self.assertEqual(versions["version_fields"]["공포일자"], "2024-12-01")
+        self.assertEqual(versions["version_fields"]["제개정구분명"], "일부개정")
+
+    def test_get_version_falls_back_when_history_versions_is_empty(self):
+        api = EmptyHistoryFakeNlicApiWrapper()
+        versions = api.get_version("L1")
+
+        self.assertEqual(versions["source_target"], "law_fallback")
+        self.assertEqual(versions["version_fields"]["시행일자"], "2025-01-01")
+
+    def test_search_law_with_live_fixture_payload(self):
+        api = LiveFixtureNlicApiWrapper()
+        result = api.search_law("개인정보보호법")
+
+        self.assertEqual(result["LawSearch"]["resultCode"], "00")
+        self.assertEqual(result["LawSearch"]["law"][0]["법령ID"], "011357")
+        self.assertEqual(result["LawSearch"]["law"][1]["법령명한글"], "개인정보 보호법 시행령")
+
+    def test_get_article_with_live_fixture_payload(self):
+        api = LiveFixtureNlicApiWrapper()
+        article = api.get_article("011357", "제1조")
+
+        self.assertTrue(article["found"])
+        self.assertEqual(article["matched_via"], "service:law")
+        self.assertEqual(article["article_candidates"], ["제1조", "000100"])
+        self.assertIn("개인정보의 처리 및 보호", article["article_text"])
+
+    def test_get_version_with_live_fixture_payload(self):
+        api = LiveFixtureNlicApiWrapper()
+        versions = api.get_version("011357")
+
+        self.assertEqual(versions["source_target"], "law_fallback")
+        self.assertEqual(versions["version_fields"]["시행일자"], "20251002")
+        self.assertEqual(versions["version_fields"]["공포일자"], "20250401")
         self.assertEqual(versions["version_fields"]["제개정구분명"], "일부개정")
 
 

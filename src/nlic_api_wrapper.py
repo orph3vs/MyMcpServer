@@ -101,6 +101,17 @@ class NlicApiWrapper:
         return isinstance(raw, str) and not raw.strip()
 
     @staticmethod
+    def _has_version_payload(result: Dict[str, Any]) -> bool:
+        versions = result.get("versions")
+        if isinstance(versions, list) and versions:
+            return True
+
+        return any(
+            NlicApiWrapper._extract_from_nested(result, (key,)) is not None
+            for key in ("시행일자", "공포일자", "제개정구분", "제개정구분명", "개정문")
+        )
+
+    @staticmethod
     def _extract_from_nested(obj: Any, key_candidates: Tuple[str, ...]) -> Optional[str]:
         if isinstance(obj, dict):
             for key in key_candidates:
@@ -277,8 +288,8 @@ class NlicApiWrapper:
         normalized_law_id = law_id.strip()
         history_result = self._call("history", {"ID": normalized_law_id})
 
-        # Some environments return blank raw for target=history.
-        if history_result and not self._is_blank_raw(history_result):
+        # Some environments return blank raw or structurally empty payload for target=history.
+        if history_result and not self._is_blank_raw(history_result) and self._has_version_payload(history_result):
             return {
                 "law_id": normalized_law_id,
                 "source_target": "history",
@@ -305,8 +316,8 @@ class NlicApiWrapper:
         article_result = self.get_article(law_id=law_id, article_no=article_no)
 
         return {
-            "law_id": law_id,
-            "article_no": article_no,
+            "law_id": article_result["law_id"],
+            "article_no": article_result["article_no"],
             "is_valid": bool(article_result.get("found")),
             "source": article_result,
         }
