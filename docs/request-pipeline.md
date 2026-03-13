@@ -19,6 +19,8 @@ User
   - `PipelineRequest`
   - `PipelineResponse`
   - `PipelineStageError`
+- `src/answer_composer.py`
+  - 법령 근거 기반 최종 설명형 답변 조립 모듈
 
 ## 에러 처리
 - 단계별 오류(`PipelineStageError`) 발생 시:
@@ -52,6 +54,7 @@ User
 - 조문 본문이 있으면 `법령명 + 조문번호 + 원문 + 쉬운 설명` 순서로 답합니다.
 - 조문 본문이 없으면 대표 법령과 시행일자, 추가 확인 필요 사항을 설명형으로 안내합니다.
 - 프롬프트 파일의 원칙(근거 없는 문장 금지, 추정 금지, 시점 불명확 시 확인 필요 안내)은 답변 조립 규칙의 제약으로 반영됩니다.
+- 답변 조립 규칙은 `AnswerComposer`에 분리되어, 목적조항/정의조항/제재조항 등 유형별 문구를 다르게 처리합니다.
 - 응답 `citations`에는 아래 구조가 포함됩니다.
   - `law_search.used_search_query`
   - `law_search.search_hit_count`
