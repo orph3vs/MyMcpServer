@@ -147,6 +147,36 @@ class AnswerComposer:
         return "이 질문은 해석상 주의가 필요한 편이므로 실제 적용 시에는 관련 조문과 사실관계를 추가로 확인하는 편이 안전합니다."
 
     @classmethod
+    def _comparison_summary(
+        cls,
+        base_article_no: str,
+        base_article_title: Optional[str],
+        related_articles: List[Dict[str, Any]],
+    ) -> Optional[str]:
+        valid_articles = [
+            article
+            for article in related_articles
+            if isinstance(article, dict) and article.get("found") and article.get("article_no") and article.get("article_text")
+        ]
+        if not valid_articles:
+            return None
+
+        base_label = base_article_title or "기준 주제"
+        comparisons: List[str] = []
+        for article in valid_articles[:2]:
+            related_title = cls._extract_article_title(str(article.get("article_text", ""))) or "다른 주제"
+            if related_title == base_label:
+                comparisons.append(f"{article['article_no']}도 비슷한 주제를 다루지만 세부 내용이나 적용 범위는 직접 조문 문구로 비교해야 합니다.")
+            else:
+                comparisons.append(f"{base_article_no}가 {base_label}에 초점을 둔다면 {article['article_no']}는 {related_title} 쪽에 무게가 실려 있습니다.")
+        if not comparisons:
+            return None
+
+        lines = ["[비교 요약]"]
+        lines.extend(comparisons)
+        return "\n".join(lines)
+
+    @classmethod
     def _related_articles_block(cls, related_articles: List[Dict[str, Any]], intent: str) -> Optional[str]:
         valid_articles = [
             article
@@ -226,6 +256,10 @@ class AnswerComposer:
                 "",
                 self._build_plain_explanation(article_title, law_name, article_no),
             ]
+
+            comparison_summary = self._comparison_summary(article_no, article_title, related_articles) if intent == "difference" else None
+            if comparison_summary:
+                lines.extend(["", comparison_summary])
 
             related_block = self._related_articles_block(related_articles, intent)
             if related_block:

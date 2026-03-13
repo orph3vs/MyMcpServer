@@ -139,6 +139,8 @@ class AnswerComposerTests(unittest.TestCase):
         )
 
         self.assertIn("다른 조문과 비교할 때 기준점이 되는 조문", result)
+        self.assertIn("[비교 요약]", result)
+        self.assertIn("제1조가 목적에 초점을 둔다면 제2조는 정의 쪽에 무게가 실려 있습니다.", result)
         self.assertIn("[비교 참고 조문]", result)
         self.assertIn("제2조(정의)", result)
         self.assertIn("비교 대상 조문", result)
