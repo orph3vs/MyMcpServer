@@ -39,11 +39,11 @@ class FakeLawApiOk:
             "제1조": "목적",
             "제2조": "정의",
             "제3조": "적용범위",
-            "제15조": "개인정보의 수집ㆍ이용",
+            "제15조": "개인정보의 수집·이용",
             "제17조": "개인정보의 제공",
             "제34조": "개인정보 유출 통지",
             "제34조의2": "유출 신고",
-            "제58조": "적용의 일부 제외",
+            "제8조": "적용의 일부 제외",
             "제75조": "과태료",
         }
         title = titles.get(article_no, "일반")
@@ -63,7 +63,7 @@ class FakeLawApiOk:
                     {
                         "판례일련번호": "P1",
                         "사건명": "개인정보 보호법 사건",
-                        "사건번호": "2025다12345",
+                        "사건번호": "2025두2345",
                         "법원명": "대법원",
                         "선고일자": "20250101",
                     }
@@ -72,7 +72,12 @@ class FakeLawApiOk:
         }
 
     def get_precedent(self, precedent_id):
-        return {"precedent_id": precedent_id, "사건명": "개인정보 보호법 사건", "사건번호": "2025다12345"}
+        return {
+            "precedent_id": precedent_id,
+            "사건명": "개인정보 보호법 사건",
+            "사건번호": "2025두2345",
+            "판결요지": "법정 요건을 충족하지 못한 동의는 유효한 동의로 보기 어렵다.",
+        }
 
 
 class FakeLawApiEmpty:
@@ -125,6 +130,7 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertTrue(result.answer)
             self.assertIn("law_search", result.citations)
             self.assertIn("law_context", result.citations)
+            self.assertIn("review_summary", result.citations)
             self.assertEqual(result.citations["law_context"]["primary_law"]["law_id"], "011357")
             self.assertEqual(result.mode, "multi_agent")
             self.assertGreaterEqual(result.score, 0)
@@ -210,7 +216,7 @@ class RequestPipelineTests(unittest.TestCase):
 
             result = pipeline.process(
                 PipelineRequest(
-                    user_query="개인정보 보호법 제15조가 위법 판단 기준인지 설명해줘",
+                    user_query="개인정보 보호법 제75조가 위법 판단 기준인지 설명해줘",
                     context="기준시점: 2025-01-01",
                 )
             )
@@ -220,6 +226,25 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertEqual(result.citations["law_context"]["precedent"]["precedent_id"], "P1")
             self.assertIn("[참고 판례]", result.answer)
             self.assertEqual(result.mode, "multi_agent")
+            self.assertTrue(result.citations["review_summary"]["requires_caution"])
+
+    def test_process_surfaces_precedent_relevance_in_answer_and_citations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = CostLogger(db_path=str(Path(tmp) / "cost_logs.db"))
+            law_api = FakeLawApiOk()
+            pipeline = RequestPipeline(law_api=law_api, logger=logger)
+
+            result = pipeline.process(
+                PipelineRequest(
+                    user_query="개인정보 보호법 제15조가 위법 판단 기준인지 설명하고 관련 판례도 같이 보여줘",
+                    context="기준시점: 2025-01-01",
+                )
+            )
+
+            self.assertIsNone(result.error)
+            self.assertIn("관련성:", result.answer)
+            self.assertIn("제15조와 직접 연결된 검색", result.answer)
+            self.assertTrue(result.citations["review_summary"]["precedent_relevant"])
 
     def test_process_adds_precedent_on_explicit_request_even_if_low_risk(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -229,7 +254,7 @@ class RequestPipelineTests(unittest.TestCase):
 
             result = pipeline.process(
                 PipelineRequest(
-                    user_query="개인정보 보호법 제3조 설명하고 관련 판례도 같이 보여줘",
+                    user_query="개인정보 보호법 제1조 설명하고 관련 판례도 같이 보여줘",
                     context="기준시점: 2025-01-01",
                 )
             )

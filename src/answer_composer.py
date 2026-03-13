@@ -319,10 +319,31 @@ class AnswerComposer:
         if used_precedent_query:
             lines.append(f"- 판례 검색 기준: {used_precedent_query}")
 
+        review_summary = law_enrichment.get("review_summary") or {}
+        relevance_note = cls._clean_text(str(review_summary.get("precedent_relevance_note", "")))
+        if relevance_note:
+            lines.append(f"- 관련성: {relevance_note}")
+
         precedent_note = cls._precedent_note(law_enrichment.get("precedent_detail") or {})
         if precedent_note:
             lines.append(f"- 판례 요지: {precedent_note}")
         return "\n".join(lines)
+
+    @classmethod
+    def _review_notice(cls, review_summary: Dict[str, Any], risk_level: str) -> Optional[str]:
+        if not isinstance(review_summary, dict) or not review_summary:
+            return None
+
+        if review_summary.get("has_conflict"):
+            return (
+                "현재 확보된 법령, 판례, 리스크 검토 신호를 함께 보면 단정적으로 결론내리기보다 "
+                "사실관계와 예외 사유를 추가 확인하는 방향이 더 안전합니다."
+            )
+        if risk_level == "HIGH" and review_summary.get("requires_caution"):
+            return (
+                "이 사안은 고위험 질문으로 분류되어, 답변은 조문과 판례를 중심으로 보수적으로 이해하는 편이 안전합니다."
+            )
+        return None
 
     @classmethod
     def _related_articles_block(cls, related_articles: List[Dict[str, Any]], intent: str) -> Optional[str]:
@@ -388,6 +409,7 @@ class AnswerComposer:
         related_articles = law_enrichment.get("related_articles") or []
         used_search_query = self._clean_text(str(law_enrichment.get("used_search_query", ""))) or None
         prompt_rules = self._prompt_rules(composition_input.prompt_payload)
+        review_summary = law_enrichment.get("review_summary") or {}
 
         law_name = self._clean_text(str(primary_law.get("law_name", "")))
         article_text = self._clean_text(str(article.get("article_text", "")))
@@ -431,6 +453,10 @@ class AnswerComposer:
             if precedent_block:
                 lines.extend(["", precedent_block])
 
+            review_notice = self._review_notice(review_summary, composition_input.risk_level)
+            if review_notice:
+                lines.extend(["", review_notice])
+
             risk_notice = self._build_risk_notice(composition_input.risk_level, article_title, prompt_rules)
             if risk_notice:
                 lines.extend(["", risk_notice])
@@ -463,6 +489,10 @@ class AnswerComposer:
             precedent_block = self._precedent_block(law_enrichment)
             if precedent_block:
                 lines.extend(["", precedent_block])
+
+            review_notice = self._review_notice(review_summary, composition_input.risk_level)
+            if review_notice:
+                lines.append(review_notice)
 
             tail_guidance = self._tail_guidance(composition_input.user_query, prompt_rules)
             if tail_guidance and tail_guidance not in lines:

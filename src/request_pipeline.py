@@ -512,6 +512,7 @@ class RequestPipeline:
                 risk_level=risk_level,
                 law_enrichment=law_enrichment,
             )
+            law_enrichment["review_summary"] = agent_result.review_summary
             answer = self.answer_composer.compose(
                 AnswerCompositionInput(
                     user_query=req.user_query,
@@ -526,6 +527,7 @@ class RequestPipeline:
             citations = {
                 "law_search": self._summarize_search_results(law_data, used_search_query),
                 "law_context": self._summarize_law_enrichment(law_enrichment),
+                "review_summary": agent_result.review_summary,
             }
             self._validate(answer=answer, citations=citations)
 

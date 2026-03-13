@@ -270,3 +270,6 @@
 - 2026-03-13: `AnswerComposer` rebuilt with prompt-aware grounding rules, stronger precedent gist output, and clearer fallback handling.
 - 2026-03-13: `tests/test_answer_composer.py` refreshed to cover purpose/sanction/applicability/procedure/comparison and precedent-summary cases.
 - 2026-03-13: Full test suite passed (`Ran 56 tests`, `OK`).
+- 2026-03-13: Multi-agent review now emits structured caution/relevance signals and marks high-risk conflicts conservatively.
+- 2026-03-13: Request pipeline now exposes `review_summary` in citations and passes review signals into final answer composition.
+- 2026-03-13: Full test suite passed again after review/precedent upgrades (`Ran 58 tests`, `OK`).
