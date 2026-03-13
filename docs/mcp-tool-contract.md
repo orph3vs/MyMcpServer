@@ -7,6 +7,16 @@
 python -m src.mcp_stdio_server
 ```
 
+Windows MCP 클라이언트 연결 시 권장 실행 파일:
+```bat
+C:\MCP_Server\MyMcpServer\run_mcp_stdio_server.cmd
+```
+
+권장 이유:
+- 작업 디렉터리를 고정합니다.
+- `PYTHONUNBUFFERED=1`과 `-u`를 함께 적용합니다.
+- UI 설정에서 Python 경로/인자 분리를 잘못 넣어 발생하는 handshake 실패를 줄입니다.
+
 지원 메서드:
 - `initialize`
 - `tools/list`

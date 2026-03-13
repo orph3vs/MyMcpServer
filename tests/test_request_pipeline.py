@@ -90,6 +90,7 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertIn("law_search", result.citations)
             self.assertIn("law_context", result.citations)
             self.assertEqual(result.citations["law_context"]["primary_law"]["law_id"], "011357")
+            self.assertNotIn("[통합검토]", result.answer)
             self.assertGreaterEqual(result.score, 0)
 
             logged = logger.get_by_request_id(result.request_id)
@@ -111,8 +112,9 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertIsNone(result.error)
             self.assertIn("law_context", result.citations)
             self.assertEqual(result.citations["law_context"]["article"]["article_no"], "제1조")
-            self.assertIn("대표 법령: 개인정보 보호법", result.answer)
-            self.assertIn("조문 요약:", result.answer)
+            self.assertIn("개인정보 보호법 제1조는 목적에 관한 규정입니다.", result.answer)
+            self.assertIn("현재 확인된 조문은 다음과 같습니다.", result.answer)
+            self.assertIn("쉽게 말하면", result.answer)
 
     def test_process_uses_normalized_law_search_query(self):
         with tempfile.TemporaryDirectory() as tmp:
