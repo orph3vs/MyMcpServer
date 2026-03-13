@@ -8,25 +8,38 @@ class FakeNlicApiWrapper(NlicApiWrapper):
         super().__init__(oc="test_oc", cache_ttl_seconds=300)
         self.calls = []
 
-    def _request(self, params):
-        self.calls.append(params)
+    def _request(self, params, endpoint_url=None):
+        self.calls.append({"params": params, "endpoint_url": endpoint_url})
         target = params.get("target")
         if target == "law" and params.get("query"):
             return {"law": [{"id": "L1", "name": params["query"]}]}
+        if endpoint_url == self.service_url and target == "law" and params.get("MST") and params.get("JO"):
+            return {"조문내용": f"MST-{params['MST']}:{params['JO']}"}
+        if endpoint_url == self.service_url and target == "law" and params.get("ID") and params.get("JO"):
+            return {"raw": "   "}
         if target == "law" and params.get("ID") and params.get("JO"):
-            return {"조문내용": f"{params['ID']}:{params['JO']}"}
+            return {"raw": "   "}
         if target == "law" and params.get("ID"):
-            return {"시행일자": "2025-01-01", "공포일자": "2024-12-01"}
+            return {
+                "LawSearch": {
+                    "law": {
+                        "법령일련번호": "270351",
+                        "시행일자": "2025-01-01",
+                        "공포일자": "2024-12-01",
+                        "제개정구분명": "일부개정",
+                    }
+                }
+            }
         if target == "history":
             return {"versions": [{"id": params.get("ID"), "ver": "2025-01-01"}]}
         return {}
 
 
 class BlankHistoryFakeNlicApiWrapper(FakeNlicApiWrapper):
-    def _request(self, params):
+    def _request(self, params, endpoint_url=None):
         if params.get("target") == "history":
             return {"raw": "   "}
-        return super()._request(params)
+        return super()._request(params, endpoint_url=endpoint_url)
 
 
 class NlicApiWrapperTests(unittest.TestCase):
@@ -46,7 +59,7 @@ class NlicApiWrapperTests(unittest.TestCase):
         self.assertEqual(article["law_id"], "L1")
         self.assertEqual(article["article_no"], "제1조")
         self.assertTrue(article["found"])
-        self.assertEqual(article["article_text"], "L1:제1조")
+        self.assertEqual(article["article_text"], "MST-270351:제1조")
         self.assertTrue(validated["is_valid"])
 
     def test_get_version(self):
@@ -61,6 +74,8 @@ class NlicApiWrapperTests(unittest.TestCase):
 
         self.assertEqual(versions["source_target"], "law_fallback")
         self.assertEqual(versions["version_fields"]["시행일자"], "2025-01-01")
+        self.assertEqual(versions["version_fields"]["공포일자"], "2024-12-01")
+        self.assertEqual(versions["version_fields"]["제개정구분명"], "일부개정")
 
 
 if __name__ == "__main__":
