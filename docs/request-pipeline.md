@@ -35,3 +35,9 @@ User
   - `python -m src.http_server`
   - `GET /health`
   - `POST /ask` (`{"user_query":"...","context":"..."}`)
+
+
+## 자동 context 조립
+- 실제 사용에서는 사용자가 `context`를 직접 넣지 않아도 됩니다.
+- `/ask` 요청의 `metadata`(dict), `history`(list)를 서버가 받아 내부 `context`로 자동 조립합니다.
+- `context`를 함께 보내면 자동 조립 결과에 포함됩니다.

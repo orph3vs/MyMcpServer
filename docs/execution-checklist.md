@@ -35,10 +35,11 @@ curl http://localhost:8000/health
 - `{"status": "ok"}` 응답
 
 ## 4) HTTP 질의 요청
+(선택) metadata/history를 함께 보내면 서버가 context를 자동 조립합니다.
 ```bash
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
-  -d '{"user_query":"개인정보 위탁과 제3자 제공 차이","context":"기준시점: 2025-01-01"}'
+  -d '{"user_query":"개인정보 위탁과 제3자 제공 차이","context":"기준시점: 2025-01-01","metadata":{"tenant":"acme","locale":"ko-KR"},"history":["이전 질문 1","이전 질문 2"]}'
 ```
 
 정상 기준:
@@ -48,3 +49,9 @@ curl -X POST http://localhost:8000/ask \
 ## 참고
 - 네트워크 환경 제약이 있으면 외부 NLIC 호출 단계에서 `error`가 나올 수 있습니다.
 - 이 경우에도 파이프라인/에러 처리/로그 저장 동작 자체는 정상일 수 있습니다.
+
+
+## Windows 인코딩 참고
+- Git Bash/명령프롬프트에서 한글 JSON 전송 시 인코딩 충돌이 날 수 있습니다.
+- 이 서버는 `utf-8`, `utf-8-sig`, `cp949`, `euc-kr` 요청 바디를 자동 처리합니다.
+- 그래도 문제가 있으면 PowerShell의 `Invoke-RestMethod` 사용을 권장합니다.

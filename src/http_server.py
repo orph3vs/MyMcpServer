@@ -12,6 +12,7 @@ from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
+from src.context_builder import build_context
 from src.request_pipeline import PipelineRequest, RequestPipeline
 
 
@@ -24,9 +25,24 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: Dict[s
     handler.wfile.write(body)
 
 
+def _decode_request_body(raw_body: bytes) -> str:
+    """Decode request body with UTF-8 first, then common Korean Windows encodings."""
+    if not raw_body:
+        return ""
+
+    for encoding in ("utf-8", "utf-8-sig", "cp949", "euc-kr"):
+        try:
+            return raw_body.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    raise ValueError("invalid_encoding: supported=utf-8,utf-8-sig,cp949,euc-kr")
+
+
 def parse_ask_request(raw_body: bytes) -> Tuple[PipelineRequest, Dict[str, Any]]:
     try:
-        data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+        decoded = _decode_request_body(raw_body)
+        data = json.loads(decoded) if decoded else {}
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid_json:{exc}") from exc
 
@@ -34,9 +50,18 @@ def parse_ask_request(raw_body: bytes) -> Tuple[PipelineRequest, Dict[str, Any]]
     if not user_query:
         raise ValueError("missing_user_query")
 
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else None
+    history = data.get("history") if isinstance(data.get("history"), list) else None
+
+    context = build_context(
+        explicit_context=data.get("context"),
+        metadata=metadata,
+        history=history,
+    )
+
     req = PipelineRequest(
         user_query=user_query,
-        context=data.get("context"),
+        context=context,
         request_id=data.get("request_id"),
     )
     return req, data
