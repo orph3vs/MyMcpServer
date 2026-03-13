@@ -42,6 +42,17 @@ User
 - `/ask` 요청의 `metadata`(dict), `history`(list)를 서버가 받아 내부 `context`로 자동 조립합니다.
 - `context`를 함께 보내면 자동 조립 결과에 포함됩니다.
 
+## 법령 enrichment
+- `/ask` 처리 중 `search_law` 결과에서 대표 법령을 1건 선택합니다.
+- 대표 법령이 식별되면 `get_version`을 추가 호출해 시행일자/공포일자/제개정구분을 보강합니다.
+- 질문에 `제1조`, `제10조의2` 같은 조문 표현이 있으면 `get_article`도 함께 호출합니다.
+- 보강된 법령 정보는 내부 `context`에 `[LAW_CONTEXT]` 블록으로 합쳐져 에이전트 입력에 전달됩니다.
+- 응답 `citations`에는 아래 구조가 포함됩니다.
+  - `law_search_result`
+  - `law_enrichment.primary_law`
+  - `law_enrichment.version`
+  - `law_enrichment.article`
+
 
 ## 부가 엔드포인트
 - `POST /tools/search_law`

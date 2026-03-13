@@ -8,7 +8,32 @@ from src.request_pipeline import PipelineRequest, RequestPipeline
 
 class FakeLawApiOk:
     def search_law(self, query):
-        return {"law": [{"name": query, "id": "L1"}]}
+        return {
+            "LawSearch": {
+                "law": [
+                    {
+                        "법령ID": "011357",
+                        "법령명한글": "개인정보 보호법",
+                        "법령일련번호": "270351",
+                    }
+                ]
+            }
+        }
+
+    def get_version(self, law_id):
+        return {
+            "law_id": law_id,
+            "source_target": "law_fallback",
+            "version_fields": {"시행일자": "20251002", "공포일자": "20250401", "제개정구분명": "일부개정"},
+        }
+
+    def get_article(self, law_id, article_no):
+        return {
+            "law_id": law_id,
+            "article_no": article_no,
+            "found": True,
+            "article_text": f"{article_no}(목적) 테스트 조문 본문",
+        }
 
 
 class FakeLawApiEmpty:
@@ -30,12 +55,32 @@ class RequestPipelineTests(unittest.TestCase):
 
             self.assertIsNone(result.error)
             self.assertTrue(result.answer)
-            self.assertIn("law_api_result", result.citations)
+            self.assertIn("law_search_result", result.citations)
+            self.assertIn("law_enrichment", result.citations)
+            self.assertEqual(result.citations["law_enrichment"]["primary_law"]["law_id"], "011357")
             self.assertGreaterEqual(result.score, 0)
 
             logged = logger.get_by_request_id(result.request_id)
             self.assertIsNotNone(logged)
             self.assertEqual(logged.request_id, result.request_id)
+
+    def test_process_enriches_context_with_article_and_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = CostLogger(db_path=str(Path(tmp) / "cost_logs.db"))
+            pipeline = RequestPipeline(law_api=FakeLawApiOk(), logger=logger)
+
+            result = pipeline.process(
+                PipelineRequest(
+                    user_query="개인정보 보호법 제1조 설명",
+                    context="기준시점: 2025-01-01",
+                )
+            )
+
+            self.assertIsNone(result.error)
+            self.assertIn("law_enrichment", result.citations)
+            self.assertEqual(result.citations["law_enrichment"]["article"]["article_no"], "제1조")
+            self.assertIn("대표 법령: 개인정보 보호법", result.answer)
+            self.assertIn("조문 본문:", result.answer)
 
     def test_process_error_path_logs(self):
         with tempfile.TemporaryDirectory() as tmp:

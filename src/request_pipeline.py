@@ -7,10 +7,11 @@ User -> RiskClassifier -> PromptBuilder -> LawAPI -> AgentEngine
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from src.confidence_scoring import ConfidenceInput, ConfidenceScoringEngine
 from src.cost_logger import CostLogEntry, CostLogger
@@ -72,6 +73,128 @@ class RequestPipeline:
     def _estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
         return round((tokens_in * 0.0000015) + (tokens_out * 0.000002), 6)
 
+    @staticmethod
+    def _extract_law_items(law_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not isinstance(law_data, dict):
+            return []
+
+        items = law_data.get("law")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+        if isinstance(items, dict):
+            return [items]
+
+        nested = law_data.get("LawSearch")
+        if isinstance(nested, dict):
+            nested_items = nested.get("law")
+            if isinstance(nested_items, list):
+                return [item for item in nested_items if isinstance(item, dict)]
+            if isinstance(nested_items, dict):
+                return [nested_items]
+
+        return []
+
+    @staticmethod
+    def _pick_primary_law(law_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        items = RequestPipeline._extract_law_items(law_data)
+        if not items:
+            return None
+
+        primary = items[0]
+        law_id = (
+            primary.get("법령ID")
+            or primary.get("법령 일련번호")
+            or primary.get("법령일련번호")
+            or primary.get("id")
+        )
+        law_name = (
+            primary.get("법령명한글")
+            or primary.get("법령 명한글")
+            or primary.get("법령명_한글")
+            or primary.get("name")
+        )
+
+        return {
+            "law_id": str(law_id).strip() if law_id is not None else None,
+            "law_name": str(law_name).strip() if law_name is not None else None,
+            "raw": primary,
+        }
+
+    @staticmethod
+    def _extract_article_no(question: str) -> Optional[str]:
+        match = re.search(r"제\s*(\d+)\s*조(?:\s*의\s*(\d+))?", question)
+        if not match:
+            return None
+        main_no = match.group(1)
+        sub_no = match.group(2)
+        if sub_no:
+            return f"제{int(main_no)}조의{int(sub_no)}"
+        return f"제{int(main_no)}조"
+
+    @staticmethod
+    def _merge_context(base_context: Optional[str], lines: List[str]) -> Optional[str]:
+        extra = "\n".join(line for line in lines if line)
+        if base_context and extra:
+            return f"{base_context.strip()}\n\n[LAW_CONTEXT]\n{extra}"
+        if extra:
+            return f"[LAW_CONTEXT]\n{extra}"
+        return base_context
+
+    def _build_law_enrichment(self, user_query: str, law_data: Dict[str, Any]) -> Dict[str, Any]:
+        primary_law = self._pick_primary_law(law_data)
+        enrichment: Dict[str, Any] = {
+            "search_hit_count": len(self._extract_law_items(law_data)),
+            "primary_law": primary_law,
+        }
+        if not primary_law or not primary_law.get("law_id"):
+            return enrichment
+
+        law_id = primary_law["law_id"]
+        article_no = self._extract_article_no(user_query)
+
+        if hasattr(self.law_api, "get_version"):
+            try:
+                enrichment["version"] = self.law_api.get_version(law_id)
+            except Exception as exc:  # defensive enrichment only
+                enrichment["version_error"] = str(exc)
+
+        if article_no and hasattr(self.law_api, "get_article"):
+            try:
+                enrichment["article"] = self.law_api.get_article(law_id=law_id, article_no=article_no)
+            except Exception as exc:  # defensive enrichment only
+                enrichment["article_error"] = str(exc)
+
+        return enrichment
+
+    @staticmethod
+    def _law_context_lines(enrichment: Dict[str, Any]) -> List[str]:
+        lines: List[str] = []
+        primary_law = enrichment.get("primary_law") or {}
+        if primary_law.get("law_name"):
+            lines.append(f"대표 법령: {primary_law['law_name']}")
+        if primary_law.get("law_id"):
+            lines.append(f"법령ID: {primary_law['law_id']}")
+
+        version = enrichment.get("version")
+        if isinstance(version, dict):
+            version_fields = version.get("version_fields") or {}
+            enacted = version_fields.get("시행일자")
+            promulgated = version_fields.get("공포일자")
+            revision_type = version_fields.get("제개정구분명") or version_fields.get("제개정구분")
+            if enacted:
+                lines.append(f"시행일자: {enacted}")
+            if promulgated:
+                lines.append(f"공포일자: {promulgated}")
+            if revision_type:
+                lines.append(f"제개정구분: {revision_type}")
+
+        article = enrichment.get("article")
+        if isinstance(article, dict) and article.get("found") and article.get("article_text"):
+            lines.append(f"관련 조문: {article['article_no']}")
+            lines.append(f"조문 본문: {article['article_text']}")
+
+        return lines
+
     def process(self, req: PipelineRequest) -> PipelineResponse:
         request_id = req.request_id or str(uuid.uuid4())
         started = time.perf_counter()
@@ -98,19 +221,24 @@ class RequestPipeline:
 
             # 3) LawAPI
             law_data = self.law_api.search_law(req.user_query)
-            if not law_data:
+            if not law_data or not self._extract_law_items(law_data):
                 raise PipelineStageError("LawAPI", "empty_law_data")
+            law_enrichment = self._build_law_enrichment(req.user_query, law_data)
+            enriched_context = self._merge_context(req.context, self._law_context_lines(law_enrichment))
 
             # 4) AgentEngine
             agent_result = self.agent_engine.run(
                 question=req.user_query,
-                context=req.context,
+                context=enriched_context,
             )
             answer = agent_result.integrated_review
             tokens_out = len(answer.split())
 
             # 5) Validator
-            citations = {"law_api_result": law_data}
+            citations = {
+                "law_search_result": law_data,
+                "law_enrichment": law_enrichment,
+            }
             self._validate(answer=answer, citations=citations)
 
             # 6) Scorer
