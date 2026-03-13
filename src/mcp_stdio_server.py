@@ -371,39 +371,58 @@ class McpServer:
             return self._handle_tools_list(request_id)
         if method == "tools/call":
             return self._handle_tools_call(request_id, params)
+        if method == "resources/list":
+            self._ensure_ready()
+            _log("resources/list")
+            return self._jsonrpc_result(request_id, {"resources": []})
+        if method == "resources/templates/list":
+            self._ensure_ready()
+            _log("resources/templates/list")
+            return self._jsonrpc_result(request_id, {"resourceTemplates": []})
         if request_id is None:
             return None
         raise McpProtocolError(-32601, f"Method not found: {method}")
 
 
 def _read_message(stream) -> Optional[Dict[str, Any]]:
-    content_length: Optional[int] = None
-    while True:
-        line = stream.readline()
-        if not line:
-            return None
-        if line in (b"\r\n", b"\n"):
-            break
-        header = line.decode("utf-8").strip()
+    line = stream.readline()
+    if not line:
+        return None
+
+    stripped = line.decode("utf-8").strip()
+    if not stripped:
+        return None
+
+    try:
+        # Official MCP stdio transport uses newline-delimited JSON messages.
+        return json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        # Keep a compatibility fallback for Content-Length framed inputs.
+        content_length: Optional[int] = None
+        header = stripped
         if header.lower().startswith("content-length:"):
             content_length = int(header.split(":", 1)[1].strip())
 
-    if content_length is None:
-        raise McpProtocolError(-32700, "Missing Content-Length header")
+            while True:
+                separator = stream.readline()
+                if not separator:
+                    return None
+                if separator in (b"\r\n", b"\n"):
+                    break
 
-    body = stream.read(content_length)
-    if not body:
-        return None
-    try:
-        return json.loads(body.decode("utf-8"))
-    except json.JSONDecodeError as exc:
+            body = stream.read(content_length)
+            if not body:
+                return None
+            try:
+                return json.loads(body.decode("utf-8"))
+            except json.JSONDecodeError as nested_exc:
+                raise McpProtocolError(-32700, "Parse error", {"detail": str(nested_exc)}) from nested_exc
+
         raise McpProtocolError(-32700, "Parse error", {"detail": str(exc)}) from exc
 
 
 def _write_message(stream, message: Dict[str, Any]) -> None:
-    body = json.dumps(message, ensure_ascii=False).encode("utf-8")
-    header = f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8")
-    stream.write(header)
+    body = (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
     stream.write(body)
     stream.flush()
 

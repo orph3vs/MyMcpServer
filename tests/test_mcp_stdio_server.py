@@ -129,6 +129,26 @@ class McpServerTests(unittest.TestCase):
         payload = json.loads(response["result"]["content"][0]["text"])
         self.assertEqual(payload["error"], "missing_article_no")
 
+    def test_resources_methods_return_empty_lists(self):
+        self.server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}},
+            }
+        )
+
+        resources_response = self.server.handle_message(
+            {"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}}
+        )
+        templates_response = self.server.handle_message(
+            {"jsonrpc": "2.0", "id": 3, "method": "resources/templates/list", "params": {}}
+        )
+
+        self.assertEqual(resources_response["result"]["resources"], [])
+        self.assertEqual(templates_response["result"]["resourceTemplates"], [])
+
     def test_transport_roundtrip(self):
         buffer = io.BytesIO()
         _write_message(buffer, {"jsonrpc": "2.0", "id": 1, "method": "ping"})
