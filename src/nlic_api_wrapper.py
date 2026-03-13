@@ -5,6 +5,8 @@ Implemented features:
 - get_article
 - get_version
 - validate_article
+- search_precedent
+- get_precedent
 """
 
 from __future__ import annotations
@@ -170,6 +172,21 @@ class NlicApiWrapper:
         if not query.strip():
             raise ValueError("query must not be empty")
         return self._call("law", {"query": query.strip()})
+
+    def search_precedent(self, query: str, reference_law: Optional[str] = None) -> Dict[str, Any]:
+        if not query.strip():
+            raise ValueError("query must not be empty")
+
+        params: Dict[str, Any] = {"query": query.strip()}
+        if reference_law and reference_law.strip():
+            params["JO"] = reference_law.strip()
+        return self._call("prec", params)
+
+    def get_precedent(self, precedent_id: str) -> Dict[str, Any]:
+        if not precedent_id.strip():
+            raise ValueError("precedent_id is required")
+        normalized_precedent_id = precedent_id.strip()
+        return self._call("prec", {"ID": normalized_precedent_id}, endpoint="service")
 
     def _extract_article_text(self, source: Any, article_no: str) -> Optional[str]:
         article_keys = ("조문내용", "조문", "내용", "본문", "조문단위")

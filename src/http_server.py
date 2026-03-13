@@ -8,6 +8,8 @@ Endpoints:
 - POST /tools/get_article
 - POST /tools/get_version
 - POST /tools/validate_article
+- POST /tools/search_precedent
+- POST /tools/get_precedent
 """
 
 from __future__ import annotations
@@ -174,6 +176,18 @@ class PipelineHttpHandler(BaseHTTPRequestHandler):
                 data = self.get_pipeline().law_api.validate_article(
                     law_id=fields["law_id"], article_no=fields["article_no"]
                 )
+                _json_response(self, 200, {"data": data})
+                return
+
+            if parsed.path == "/tools/search_precedent":
+                fields = parse_tool_request(raw_body, ("query",))
+                data = self.get_pipeline().law_api.search_precedent(fields["query"])
+                _json_response(self, 200, {"data": data})
+                return
+
+            if parsed.path == "/tools/get_precedent":
+                fields = parse_tool_request(raw_body, ("precedent_id",))
+                data = self.get_pipeline().law_api.get_precedent(precedent_id=fields["precedent_id"])
                 _json_response(self, 200, {"data": data})
                 return
 

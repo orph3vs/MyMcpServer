@@ -1,22 +1,12 @@
-"""Minimal MCP stdio server exposing the current law tools.
-
-Protocol coverage:
-- initialize
-- notifications/initialized
-- tools/list
-- tools/call
-
-Transport:
-- stdio with Content-Length framing
-"""
+"""Minimal MCP stdio server exposing the current law tools."""
 
 from __future__ import annotations
 
 import json
-import time
-from pathlib import Path
 import sys
+import time
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.request_pipeline import PipelineRequest, RequestPipeline
@@ -80,10 +70,7 @@ class McpServer:
                     "properties": {
                         "user_query": {
                             "type": "string",
-                            "description": (
-                                "Natural-language legal question in Korean. Examples: "
-                                "'개인정보 보호법 제1조 설명해줘', '개인정보 제3자 제공 기준 알려줘'."
-                            ),
+                            "description": "Natural-language legal question in Korean.",
                         },
                         "context": {
                             "type": "string",
@@ -104,10 +91,7 @@ class McpServer:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "user_query": {
-                            "type": "string",
-                            "description": "Natural-language Korean legal question.",
-                        },
+                        "user_query": {"type": "string", "description": "Natural-language Korean legal question."},
                         "context": {
                             "type": "string",
                             "description": "Optional extra context such as 기준시점, company facts, or constraints.",
@@ -126,9 +110,7 @@ class McpServer:
                 ),
                 "inputSchema": {
                     "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Law search query text."},
-                    },
+                    "properties": {"query": {"type": "string", "description": "Law search query text."}},
                     "required": ["query"],
                     "additionalProperties": False,
                 },
@@ -151,9 +133,7 @@ class McpServer:
             },
             {
                 "name": "get_version",
-                "description": (
-                    "Fetch version metadata such as 시행일자 and 공포일자 for a law. Use for date-sensitive legal questions."
-                ),
+                "description": "Fetch version metadata such as 시행일자 and 공포일자 for a law.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -175,6 +155,33 @@ class McpServer:
                         "article_no": {"type": "string", "description": "Article number such as 제1조."},
                     },
                     "required": ["law_id", "article_no"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "search_precedent",
+                "description": (
+                    "Search Korean precedents. Prefer this for ambiguous, high-risk, or interpretation-heavy legal questions "
+                    "when statutory text alone may not be enough."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Precedent search query text."},
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "get_precedent",
+                "description": "Fetch the detail payload for a specific precedent id returned by search_precedent.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "precedent_id": {"type": "string", "description": "Precedent id such as 판례일련번호."},
+                    },
+                    "required": ["precedent_id"],
                     "additionalProperties": False,
                 },
             },
@@ -203,6 +210,7 @@ class McpServer:
             law_context = citations.get("law_context") or {}
             primary_law = law_context.get("primary_law") or {}
             article = law_context.get("article") or {}
+            precedent = law_context.get("precedent") or {}
             lines = []
             if answer:
                 lines.append(answer)
@@ -210,11 +218,16 @@ class McpServer:
                 lines.append(f"[근거 법령] {primary_law['law_name']} ({primary_law.get('law_id', '-')})")
             if article.get("article_no"):
                 lines.append(f"[관련 조문] {article['article_no']}")
+            if precedent.get("case_name") or precedent.get("case_no"):
+                lines.append(f"[참고 판례] {precedent.get('case_name') or precedent.get('case_no')}")
             return "\n".join(lines).strip() or McpServer._tool_text(payload)
 
         if tool_name == "search_law":
+            raw_items = payload.get("LawSearch", {}).get("law") or payload.get("law") or []
+            if isinstance(raw_items, dict):
+                raw_items = [raw_items]
             items = []
-            for item in (payload.get("LawSearch", {}).get("law") or [])[:5]:
+            for item in raw_items[:5]:
                 if isinstance(item, dict):
                     law_name = item.get("법령명한글") or item.get("법령명_한글") or "-"
                     law_id = item.get("법령ID") or "-"
@@ -231,21 +244,35 @@ class McpServer:
             lines = ["법령 버전 정보"]
             if version_fields.get("시행일자"):
                 lines.append(f"- 시행일자: {version_fields['시행일자']}")
-            if version_fields.get("공포일자"):
-                lines.append(f"- 공포일자: {version_fields['공포일자']}")
-            if version_fields.get("제개정구분명"):
-                lines.append(f"- 제개정구분: {version_fields['제개정구분명']}")
+            if version_fields.get("공포일자") or version_fields.get("공포 일자"):
+                lines.append(f"- 공포일자: {version_fields.get('공포일자') or version_fields.get('공포 일자')}")
+            if version_fields.get("제개정구분명") or version_fields.get("제개정구분"):
+                lines.append(f"- 제개정구분: {version_fields.get('제개정구분명') or version_fields.get('제개정구분')}")
             return "\n".join(lines) if len(lines) > 1 else McpServer._tool_text(payload)
 
         if tool_name == "validate_article":
             return f"조문 유효성: {'true' if payload.get('is_valid') else 'false'}"
 
+        if tool_name == "search_precedent":
+            raw_items = payload.get("PrecSearch", {}).get("prec") or payload.get("prec") or []
+            if isinstance(raw_items, dict):
+                raw_items = [raw_items]
+            items = []
+            for item in raw_items[:5]:
+                if isinstance(item, dict):
+                    case_name = item.get("사건명") or item.get("판례명") or item.get("사건번호") or "-"
+                    case_no = item.get("사건번호") or "-"
+                    items.append(f"- {case_name} ({case_no})")
+            return "판례 검색 결과\n" + "\n".join(items) if items else McpServer._tool_text(payload)
+
+        if tool_name == "get_precedent":
+            return McpServer._tool_text(payload)
+
         return McpServer._tool_text(payload)
 
     def _tool_success(self, tool_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        summary = self._tool_summary(tool_name, payload)
         return {
-            "content": [{"type": "text", "text": summary}],
+            "content": [{"type": "text", "text": self._tool_summary(tool_name, payload)}],
             "structuredContent": payload,
             "isError": False,
         }
@@ -272,11 +299,7 @@ class McpServer:
         if not isinstance(requested, str):
             raise McpProtocolError(-32602, "protocolVersion is required")
 
-        if requested in SUPPORTED_PROTOCOL_VERSIONS:
-            negotiated = requested
-        else:
-            negotiated = SUPPORTED_PROTOCOL_VERSIONS[-1]
-
+        negotiated = requested if requested in SUPPORTED_PROTOCOL_VERSIONS else SUPPORTED_PROTOCOL_VERSIONS[-1]
         self.negotiated_protocol_version = negotiated
         self.initialized = False
         _log(f"initialize requested={requested} negotiated={negotiated}")
@@ -327,13 +350,17 @@ class McpServer:
                     article_no=self._require_string(arguments, "article_no"),
                 )
             elif tool_name == "get_version":
-                payload = self.pipeline.law_api.get_version(
-                    law_id=self._require_string(arguments, "law_id"),
-                )
+                payload = self.pipeline.law_api.get_version(law_id=self._require_string(arguments, "law_id"))
             elif tool_name == "validate_article":
                 payload = self.pipeline.law_api.validate_article(
                     law_id=self._require_string(arguments, "law_id"),
                     article_no=self._require_string(arguments, "article_no"),
+                )
+            elif tool_name == "search_precedent":
+                payload = self.pipeline.law_api.search_precedent(self._require_string(arguments, "query"))
+            elif tool_name == "get_precedent":
+                payload = self.pipeline.law_api.get_precedent(
+                    precedent_id=self._require_string(arguments, "precedent_id")
                 )
             else:
                 raise McpProtocolError(-32602, f"Unknown tool: {tool_name}")
@@ -341,7 +368,7 @@ class McpServer:
             raise
         except ValueError as exc:
             return self._jsonrpc_result(request_id, self._tool_failure(str(exc)))
-        except Exception as exc:  # defensive wrapper for tool execution
+        except Exception as exc:
             return self._jsonrpc_result(request_id, self._tool_failure("tool_execution_failed", {"detail": str(exc)}))
 
         return self._jsonrpc_result(request_id, self._tool_success(tool_name, payload))
@@ -394,22 +421,17 @@ def _read_message(stream) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        # Official MCP stdio transport uses newline-delimited JSON messages.
         return json.loads(stripped)
     except json.JSONDecodeError as exc:
-        # Keep a compatibility fallback for Content-Length framed inputs.
         content_length: Optional[int] = None
-        header = stripped
-        if header.lower().startswith("content-length:"):
-            content_length = int(header.split(":", 1)[1].strip())
-
+        if stripped.lower().startswith("content-length:"):
+            content_length = int(stripped.split(":", 1)[1].strip())
             while True:
                 separator = stream.readline()
                 if not separator:
                     return None
                 if separator in (b"\r\n", b"\n"):
                     break
-
             body = stream.read(content_length)
             if not body:
                 return None
@@ -417,7 +439,6 @@ def _read_message(stream) -> Optional[Dict[str, Any]]:
                 return json.loads(body.decode("utf-8"))
             except json.JSONDecodeError as nested_exc:
                 raise McpProtocolError(-32700, "Parse error", {"detail": str(nested_exc)}) from nested_exc
-
         raise McpProtocolError(-32700, "Parse error", {"detail": str(exc)}) from exc
 
 

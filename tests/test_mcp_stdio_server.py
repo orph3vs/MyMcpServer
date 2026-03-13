@@ -19,6 +19,12 @@ class FakeLawApi:
     def validate_article(self, law_id, article_no):
         return {"law_id": law_id, "article_no": article_no, "is_valid": True}
 
+    def search_precedent(self, query):
+        return {"PrecSearch": {"prec": [{"판례일련번호": "123", "사건명": "개인정보 사건", "사건번호": "2025다12345"}]}}
+
+    def get_precedent(self, precedent_id):
+        return {"precedent_id": precedent_id, "사건명": "개인정보 사건", "사건번호": "2025다12345"}
+
 
 class FakePipeline:
     def __init__(self):
@@ -27,10 +33,17 @@ class FakePipeline:
     def process(self, req):
         return PipelineResponse(
             request_id=req.request_id or "req-1",
-            risk_level="LOW",
-            mode="single_agent",
-            answer="테스트 답변",
-            citations={"law_search": {"used_search_query": "개인정보 보호법"}},
+            risk_level="HIGH",
+            mode="multi_agent",
+            answer="테스트 응답",
+            citations={
+                "law_search": {"used_search_query": "개인정보 보호법"},
+                "law_context": {
+                    "primary_law": {"law_name": "개인정보 보호법", "law_id": "011357"},
+                    "article": {"article_no": "제1조"},
+                    "precedent": {"case_name": "개인정보 사건", "case_no": "2025다12345"},
+                },
+            },
             score=83.0,
             latency_ms=12.3,
             error=None,
@@ -41,8 +54,8 @@ class McpServerTests(unittest.TestCase):
     def setUp(self):
         self.server = McpServer(pipeline=FakePipeline())
 
-    def test_initialize_and_list_tools(self):
-        init_response = self.server.handle_message(
+    def _initialize(self):
+        return self.server.handle_message(
             {
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -51,24 +64,20 @@ class McpServerTests(unittest.TestCase):
             }
         )
 
+    def test_initialize_and_list_tools(self):
+        init_response = self._initialize()
         self.assertEqual(init_response["result"]["protocolVersion"], "2025-03-26")
-        list_response = self.server.handle_message(
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
-        )
+
+        list_response = self.server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         tool_names = [tool["name"] for tool in list_response["result"]["tools"]]
         self.assertIn("ask", tool_names)
         self.assertIn("answer_with_citations", tool_names)
         self.assertIn("get_article", tool_names)
+        self.assertIn("search_precedent", tool_names)
+        self.assertIn("get_precedent", tool_names)
 
     def test_tools_call_ask(self):
-        self.server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}},
-            }
-        )
+        self._initialize()
         response = self.server.handle_message(
             {
                 "jsonrpc": "2.0",
@@ -79,21 +88,14 @@ class McpServerTests(unittest.TestCase):
         )
 
         self.assertFalse(response["result"]["isError"])
-        self.assertIn("structuredContent", response["result"])
         payload = response["result"]["structuredContent"]
-        self.assertEqual(payload["answer"], "테스트 답변")
+        self.assertEqual(payload["answer"], "테스트 응답")
         self.assertEqual(payload["citations"]["law_search"]["used_search_query"], "개인정보 보호법")
-        self.assertIn("테스트 답변", response["result"]["content"][0]["text"])
+        self.assertIn("테스트 응답", response["result"]["content"][0]["text"])
+        self.assertIn("[참고 판례] 개인정보 사건", response["result"]["content"][0]["text"])
 
     def test_tools_call_answer_with_citations_alias(self):
-        self.server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}},
-            }
-        )
+        self._initialize()
         response = self.server.handle_message(
             {
                 "jsonrpc": "2.0",
@@ -105,17 +107,25 @@ class McpServerTests(unittest.TestCase):
 
         self.assertFalse(response["result"]["isError"])
         payload = response["result"]["structuredContent"]
-        self.assertEqual(payload["answer"], "테스트 답변")
+        self.assertEqual(payload["answer"], "테스트 응답")
 
-    def test_tools_call_missing_argument_returns_tool_error(self):
-        self.server.handle_message(
+    def test_tools_call_search_precedent(self):
+        self._initialize()
+        response = self.server.handle_message(
             {
                 "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}},
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "search_precedent", "arguments": {"query": "개인정보 보호법 제15조 위법 판례"}},
             }
         )
+
+        self.assertFalse(response["result"]["isError"])
+        self.assertIn("개인정보 사건", response["result"]["content"][0]["text"])
+        self.assertEqual(response["result"]["structuredContent"]["PrecSearch"]["prec"][0]["판례일련번호"], "123")
+
+    def test_tools_call_missing_argument_returns_tool_error(self):
+        self._initialize()
         response = self.server.handle_message(
             {
                 "jsonrpc": "2.0",
@@ -130,18 +140,9 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(payload["error"], "missing_article_no")
 
     def test_resources_methods_return_empty_lists(self):
-        self.server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}},
-            }
-        )
+        self._initialize()
 
-        resources_response = self.server.handle_message(
-            {"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}}
-        )
+        resources_response = self.server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}})
         templates_response = self.server.handle_message(
             {"jsonrpc": "2.0", "id": 3, "method": "resources/templates/list", "params": {}}
         )

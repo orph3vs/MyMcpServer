@@ -20,6 +20,18 @@ class FakeNlicApiWrapper(NlicApiWrapper):
         if target == "law" and params.get("query"):
             return {"law": [{"id": "L1", "name": params["query"]}]}
 
+        if target == "prec" and params.get("query"):
+            return {
+                "PrecSearch": {
+                    "prec": [
+                        {"판례일련번호": "P1", "사건명": "테스트 판례", "사건번호": "2025다12345"},
+                    ]
+                }
+            }
+
+        if endpoint_url == self.service_url and target == "prec" and params.get("ID"):
+            return {"판례": {"판례일련번호": params["ID"], "사건명": "테스트 판례"}}
+
         if target == "law" and params.get("ID") and not params.get("JO"):
             return {
                 "LawSearch": {
@@ -46,15 +58,8 @@ class FakeNlicApiWrapper(NlicApiWrapper):
                 }
             return {"raw": "   "}
 
-        # noisy summary-like payload (contains unrelated `content`)
         if params.get("ID") and params.get("JO"):
-            return {
-                "법령": {
-                    "기본정보": {
-                        "소관부처": {"content": "개인정보보호위원회"}
-                    }
-                }
-            }
+            return {"법령": {"기본정보": {"소관부처": {"content": "개인정보보호위원회"}}}}
 
         if target == "history":
             return {"versions": [{"id": params.get("ID"), "ver": "2025-01-01"}]}
@@ -123,6 +128,18 @@ class NlicApiWrapperTests(unittest.TestCase):
 
         self.assertEqual(a, b)
         self.assertEqual(len(api.calls), 1)
+
+    def test_search_precedent(self):
+        api = FakeNlicApiWrapper()
+        result = api.search_precedent("개인정보 보호법 제15조 위법")
+
+        self.assertEqual(result["PrecSearch"]["prec"][0]["판례일련번호"], "P1")
+
+    def test_get_precedent(self):
+        api = FakeNlicApiWrapper()
+        result = api.get_precedent("P1")
+
+        self.assertEqual(result["판례"]["판례일련번호"], "P1")
 
     def test_get_article_and_validate_article(self):
         api = FakeNlicApiWrapper()
