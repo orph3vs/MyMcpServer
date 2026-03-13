@@ -166,14 +166,88 @@ class AnswerComposer:
         for article in valid_articles[:2]:
             related_title = cls._extract_article_title(str(article.get("article_text", ""))) or "다른 주제"
             if related_title == base_label:
-                comparisons.append(f"{article['article_no']}도 비슷한 주제를 다루지만 세부 내용이나 적용 범위는 직접 조문 문구로 비교해야 합니다.")
+                comparisons.append(
+                    f"{article['article_no']}도 비슷한 주제를 다루지만 세부 내용이나 적용 범위는 직접 조문 문구로 비교해야 합니다."
+                )
             else:
-                comparisons.append(f"{base_article_no}가 {base_label}에 초점을 둔다면 {article['article_no']}는 {related_title} 쪽에 무게가 실려 있습니다.")
+                comparisons.append(
+                    f"{base_article_no}가 {base_label}에 초점을 둔다면 {article['article_no']}는 {related_title} 쪽에 무게가 실려 있습니다."
+                )
         if not comparisons:
             return None
 
         lines = ["[비교 요약]"]
         lines.extend(comparisons)
+        return "\n".join(lines)
+
+    @classmethod
+    def _illegality_summary(
+        cls,
+        article_no: str,
+        article_title: Optional[str],
+        related_articles: List[Dict[str, Any]],
+    ) -> str:
+        category = cls._article_category(article_title)
+        lines = ["[판단 순서]"]
+        if category == "sanction":
+            lines.append("1. 먼저 어떤 행위가 문제 되는지 사실관계를 특정합니다.")
+            lines.append(f"2. {article_no} 자체만 보지 말고, 선행 의무조항이나 금지조항 위반이 있는지 먼저 확인합니다.")
+            lines.append(f"3. 그 위반이 {article_no}의 제재 기준에 연결되는지, 그리고 예외 사유가 없는지 순서대로 확인합니다.")
+        else:
+            lines.append(f"1. 질문 속 행위가 {article_no}가 전제하는 대상과 상황에 해당하는지 먼저 봅니다.")
+            lines.append("2. 조문이 요구하는 요건을 사실관계에 하나씩 대입해 충족 여부를 확인합니다.")
+            lines.append("3. 예외 조항이나 다른 정당화 사유가 없는지 함께 확인한 뒤 위법 여부를 판단합니다.")
+
+        found_related = [article for article in related_articles if article.get("found") and article.get("article_no")]
+        if found_related:
+            lines.append("")
+            lines.append("[추가 확인 포인트]")
+            for article in found_related[:2]:
+                title = cls._extract_article_title(str(article.get("article_text", ""))) or "관련 조문"
+                lines.append(f"- {article['article_no']}({title})도 같이 보면 위반 요건이나 예외 사유를 더 분명히 판단하는 데 도움이 됩니다.")
+        return "\n".join(lines)
+
+    @classmethod
+    def _applicability_summary(
+        cls,
+        article_no: str,
+        article_title: Optional[str],
+        related_articles: List[Dict[str, Any]],
+    ) -> str:
+        category = cls._article_category(article_title)
+        lines = ["[적용 판단 포인트]"]
+        lines.append(f"1. 질문 속 대상이 {article_no}가 상정하는 주체나 기관에 포함되는지 먼저 봅니다.")
+        if category == "scope":
+            lines.append("2. 이 조문이 적용 범위를 넓게 정하는지, 특정 영역만 한정하는지 문언을 확인합니다.")
+        elif category == "exception":
+            lines.append("2. 일반 원칙보다 예외나 특례를 다루는 조문인지 확인해 포함과 제외를 구분합니다.")
+        else:
+            lines.append("2. 조문이 요구하는 상황이나 행위 유형에 해당하는지 요건을 맞춰봅니다.")
+        lines.append("3. 적용 제외, 특례, 별도 법령 우선 같은 예외 구조가 있는지 함께 확인합니다.")
+
+        found_related = [article for article in related_articles if article.get("found") and article.get("article_no")]
+        if found_related:
+            lines.append("")
+            lines.append("[함께 볼 조문]")
+            for article in found_related[:2]:
+                title = cls._extract_article_title(str(article.get("article_text", ""))) or "관련 조문"
+                lines.append(f"- {article['article_no']}({title})를 같이 보면 포함 대상과 제외 대상의 경계를 더 분명히 볼 수 있습니다.")
+        return "\n".join(lines)
+
+    @classmethod
+    def _procedure_summary(cls, article_no: str, related_articles: List[Dict[str, Any]]) -> str:
+        lines = ["[절차 정리]"]
+        lines.append(f"1. 먼저 {article_no}의 기본 의무나 출발 절차를 확인합니다.")
+
+        found_related = [article for article in related_articles if article.get("found") and article.get("article_no")]
+        if found_related:
+            for index, article in enumerate(found_related[:2], start=2):
+                title = cls._extract_article_title(str(article.get("article_text", ""))) or "관련 절차"
+                lines.append(f"{index}. 이어서 {article['article_no']}({title})에서 후속 절차나 추가 조치를 확인합니다.")
+            lines.append(f"{min(len(found_related) + 2, 4)}. 단계별 의무의 시점과 상대방이 서로 다른지 마지막으로 점검합니다.")
+        else:
+            lines.append("2. 후속 통지, 신고, 제출 같은 연결 절차가 있는지 관련 조문을 추가로 확인합니다.")
+            lines.append("3. 각 단계의 시점과 상대방이 서로 다른지 마지막으로 점검합니다.")
         return "\n".join(lines)
 
     @classmethod
@@ -193,6 +267,9 @@ class AnswerComposer:
         elif intent == "procedure":
             lines.append("[연관 조문]")
             lines.append("절차 질문이라 흐름을 이해할 때 같이 보면 좋은 조문은 아래와 같습니다.")
+        elif intent == "applicability":
+            lines.append("[적용 참고 조문]")
+            lines.append("적용 여부를 볼 때 경계선을 함께 확인하면 좋은 조문은 아래와 같습니다.")
         else:
             lines.append("[관련 조문]")
 
@@ -257,9 +334,19 @@ class AnswerComposer:
                 self._build_plain_explanation(article_title, law_name, article_no),
             ]
 
-            comparison_summary = self._comparison_summary(article_no, article_title, related_articles) if intent == "difference" else None
-            if comparison_summary:
-                lines.extend(["", comparison_summary])
+            if intent == "difference":
+                comparison_summary = self._comparison_summary(article_no, article_title, related_articles)
+                if comparison_summary:
+                    lines.extend(["", comparison_summary])
+
+            if intent == "illegality":
+                lines.extend(["", self._illegality_summary(article_no, article_title, related_articles)])
+
+            if intent == "applicability":
+                lines.extend(["", self._applicability_summary(article_no, article_title, related_articles)])
+
+            if intent == "procedure":
+                lines.extend(["", self._procedure_summary(article_no, related_articles)])
 
             related_block = self._related_articles_block(related_articles, intent)
             if related_block:

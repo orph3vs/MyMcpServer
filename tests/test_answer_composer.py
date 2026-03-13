@@ -54,7 +54,73 @@ class AnswerComposerTests(unittest.TestCase):
 
         self.assertIn("위법 여부를 판단할 때 참고해야 할 기준", result)
         self.assertIn("제재 기준을 정한 조문", result)
+        self.assertIn("[판단 순서]", result)
+        self.assertIn("선행 의무조항이나 금지조항 위반이 있는지 먼저 확인", result)
         self.assertIn("사실관계, 주체, 시점, 예외 사유를 함께 확인", result)
+
+    def test_compose_illegality_answer_for_non_sanction_article(self):
+        result = self.composer.compose(
+            AnswerCompositionInput(
+                user_query="개인정보 보호법 제15조가 위법 판단 기준인지 설명해줘",
+                prompt_payload={"system": "x", "user": "y"},
+                law_enrichment={
+                    "primary_law": {"law_name": "개인정보 보호법"},
+                    "version": {"version_fields": {}},
+                    "article": {
+                        "found": True,
+                        "article_no": "제15조",
+                        "article_text": "제15조(개인정보의 수집ㆍ이용) 개인정보처리자는 다음 각 호의 어느 하나에 해당하는 경우 개인정보를 수집할 수 있다.",
+                    },
+                    "related_articles": [
+                        {
+                            "found": True,
+                            "article_no": "제17조",
+                            "article_text": "제17조(개인정보의 제공) 개인정보처리자는 다음 각 호의 어느 하나에 해당하는 경우 개인정보를 제3자에게 제공할 수 있다.",
+                        }
+                    ],
+                },
+                risk_level="HIGH",
+                fallback_answer="",
+            )
+        )
+
+        self.assertIn("[판단 순서]", result)
+        self.assertIn("대상과 상황에 해당하는지 먼저 봅니다.", result)
+        self.assertIn("[추가 확인 포인트]", result)
+        self.assertIn("제17조(개인정보의 제공)", result)
+
+    def test_compose_applicability_answer_adds_scope_checklist(self):
+        result = self.composer.compose(
+            AnswerCompositionInput(
+                user_query="이 경우에도 개인정보 보호법 제3조가 적용되는지 설명해줘",
+                prompt_payload={"system": "x", "user": "y"},
+                law_enrichment={
+                    "primary_law": {"law_name": "개인정보 보호법"},
+                    "version": {"version_fields": {}},
+                    "article": {
+                        "found": True,
+                        "article_no": "제3조",
+                        "article_text": "제3조(적용범위) 이 법은 공공기관과 사업자에게 적용한다.",
+                    },
+                    "related_articles": [
+                        {
+                            "found": True,
+                            "article_no": "제58조",
+                            "article_text": "제58조(적용의 일부 제외) 이 법의 일부 규정은 다음 각 호의 경우에 적용하지 아니한다.",
+                        }
+                    ],
+                },
+                risk_level="LOW",
+                fallback_answer="",
+            )
+        )
+
+        self.assertIn("[적용 판단 포인트]", result)
+        self.assertIn("상정하는 주체나 기관에 포함되는지", result)
+        self.assertIn("적용 범위를 넓게 정하는지", result)
+        self.assertIn("[함께 볼 조문]", result)
+        self.assertIn("제58조(적용의 일부 제외)", result)
+        self.assertIn("[적용 참고 조문]", result)
 
     def test_compose_fallback_for_related_law_without_article(self):
         result = self.composer.compose(
@@ -145,7 +211,7 @@ class AnswerComposerTests(unittest.TestCase):
         self.assertIn("제2조(정의)", result)
         self.assertIn("비교 대상 조문", result)
 
-    def test_compose_procedure_question_adds_related_articles(self):
+    def test_compose_procedure_question_adds_staged_steps(self):
         result = self.composer.compose(
             AnswerCompositionInput(
                 user_query="개인정보 보호법 제34조와 제34조의2 절차를 설명해줘",
@@ -172,6 +238,9 @@ class AnswerComposerTests(unittest.TestCase):
         )
 
         self.assertIn("절차나 처리 순서를 이해할 때 먼저 확인할 조문", result)
+        self.assertIn("[절차 정리]", result)
+        self.assertIn("1. 먼저 제34조의 기본 의무", result)
+        self.assertIn("2. 이어서 제34조의2(유출 신고)", result)
         self.assertIn("[연관 조문]", result)
         self.assertIn("단계별로 다시 정리", result)
 
