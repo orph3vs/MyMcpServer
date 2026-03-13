@@ -105,6 +105,50 @@ class AnswerComposerTests(unittest.TestCase):
         self.assertIn("시행일자를 특정하지 못했습니다.", result)
         self.assertIn("확정적으로 단정하기보다", result)
 
+    def test_compose_difference_question_adds_comparison_guidance(self):
+        result = self.composer.compose(
+            AnswerCompositionInput(
+                user_query="개인정보 보호법 제1조 차이 설명",
+                prompt_payload={"system": "x", "user": "y"},
+                law_enrichment={
+                    "primary_law": {"law_name": "개인정보 보호법"},
+                    "version": {"version_fields": {}},
+                    "article": {
+                        "found": True,
+                        "article_no": "제1조",
+                        "article_text": "제1조(목적) 이 법은 개인정보의 처리 및 보호에 관한 사항을 정한다.",
+                    },
+                },
+                risk_level="LOW",
+                fallback_answer="",
+            )
+        )
+
+        self.assertIn("비교 질문의 기준점", result)
+        self.assertIn("비교 대상 조문", result)
+
+    def test_compose_illegality_question_adds_cautious_guidance(self):
+        result = self.composer.compose(
+            AnswerCompositionInput(
+                user_query="개인정보 보호법 제75조가 위법 여부 판단 기준인지 알려줘",
+                prompt_payload={"system": "x", "user": "y"},
+                law_enrichment={
+                    "primary_law": {"law_name": "개인정보 보호법"},
+                    "version": {"version_fields": {}},
+                    "article": {
+                        "found": True,
+                        "article_no": "제75조",
+                        "article_text": "제75조(벌칙) 다음 각 호의 어느 하나에 해당하는 자는 처벌한다.",
+                    },
+                },
+                risk_level="HIGH",
+                fallback_answer="",
+            )
+        )
+
+        self.assertIn("위법 여부를 판단할 때 참고", result)
+        self.assertIn("조문 문구만으로 단정하기 어렵고", result)
+
 
 if __name__ == "__main__":
     unittest.main()
