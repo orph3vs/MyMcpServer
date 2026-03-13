@@ -157,6 +157,7 @@ class AnswerComposerTests(unittest.TestCase):
                         "판결요지": "동의 없는 개인정보 수집이 허용되는지 여부는 법정 요건 충족 여부를 엄격하게 본다."
                     },
                     "used_precedent_query": "개인정보 보호법 제15조 판례",
+                    "review_summary": {"precedent_relevance_note": "제15조와 직접 연결된 검색"},
                 },
                 risk_level="HIGH",
                 fallback_answer="",
@@ -167,6 +168,7 @@ class AnswerComposerTests(unittest.TestCase):
         self.assertIn("개인정보 보호법 사건", result)
         self.assertIn("- 판례 검색 기준: 개인정보 보호법 제15조 판례", result)
         self.assertIn("- 판례 요지: 동의 없는 개인정보 수집이 허용되는지 여부는", result)
+        self.assertIn("- 해석상 의미: 이 판례는", result)
 
     def test_compose_fallback_for_related_law_without_article(self):
         result = self.composer.compose(

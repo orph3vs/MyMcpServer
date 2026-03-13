@@ -46,6 +46,14 @@ class PipelineStageError(RuntimeError):
 class RequestPipeline:
     """Coordinates all modules into one deterministic processing flow."""
 
+    _RELATED_LAW_HINTS = {
+        "개인정보 보호법": ("개인정보", "개인정보처리", "정보주체"),
+        "공동주택관리법": ("공동주택", "아파트", "입주자", "관리사무소", "입주자대표회의"),
+        "위치정보의 보호 및 이용 등에 관한 법률": ("위치정보", "위치기반", "gps", "지오펜싱"),
+        "정보통신망 이용촉진 및 정보보호 등에 관한 법률": ("정보통신망", "온라인서비스", "통신망", "게시판", "서비스제공자"),
+        "신용정보의 이용 및 보호에 관한 법률": ("신용정보", "cb", "kcb", "nice", "금융거래정보", "개인신용정보"),
+    }
+
     _QUESTION_INTENT_KEYWORDS = {
         "difference": ("차이", "구분", "비교", "다른 점"),
         "requirements": ("요건", "조건", "기준", "해당", "충족"),
@@ -234,6 +242,29 @@ class RequestPipeline:
         return deduped
 
     @classmethod
+    def _related_law_queries(cls, user_query: str) -> List[str]:
+        normalized = cls._clean_text(user_query).lower()
+        queries: List[str] = []
+        for law_name, hints in cls._RELATED_LAW_HINTS.items():
+            if any(hint.lower() in normalized for hint in hints):
+                queries.append(law_name)
+        return queries
+
+    @classmethod
+    def _merge_law_results(cls, datasets: List[Dict[str, Any]]) -> Dict[str, Any]:
+        merged_items: List[Dict[str, Any]] = []
+        seen_ids = set()
+        for dataset in datasets:
+            for item in cls._extract_law_items(dataset):
+                law_id = item.get("법령ID") or item.get("법령일련번호") or item.get("id")
+                key = str(law_id).strip() if law_id is not None else cls._clean_text(str(item))
+                if key in seen_ids:
+                    continue
+                seen_ids.add(key)
+                merged_items.append(item)
+        return {"LawSearch": {"law": merged_items}}
+
+    @classmethod
     def _precedent_search_queries(
         cls,
         user_query: str,
@@ -274,6 +305,19 @@ class RequestPipeline:
             "search_hit_count": len(self._extract_law_items(law_data)),
             "primary_law": primary_law,
         }
+        all_laws = self._extract_law_items(law_data)
+        related_laws = []
+        for item in all_laws[1:4]:
+            law_id = item.get("법령ID") or item.get("법령일련번호") or item.get("id")
+            law_name = item.get("법령명한글") or item.get("법령명_한글") or item.get("name")
+            related_laws.append(
+                {
+                    "law_id": str(law_id).strip() if law_id is not None else None,
+                    "law_name": str(law_name).strip() if law_name is not None else None,
+                }
+            )
+        if related_laws:
+            enrichment["related_laws"] = related_laws
         if not primary_law or not primary_law.get("law_id"):
             return enrichment
 
@@ -356,6 +400,11 @@ class RequestPipeline:
             lines.append(f"대표 법령: {primary_law['law_name']}")
         if primary_law.get("law_id"):
             lines.append(f"법령ID: {primary_law['law_id']}")
+        related_laws = enrichment.get("related_laws") or []
+        if related_laws:
+            labels = [law["law_name"] for law in related_laws if isinstance(law, dict) and law.get("law_name")]
+            if labels:
+                lines.append("관련 법령: " + ", ".join(labels[:3]))
 
         version = enrichment.get("version")
         if isinstance(version, dict):
@@ -450,6 +499,7 @@ class RequestPipeline:
 
         return {
             "search_queries": enrichment.get("search_queries", []),
+            "related_law_queries": enrichment.get("related_law_queries", []),
             "used_search_query": enrichment.get("used_search_query"),
             "precedent_search_queries": enrichment.get("precedent_search_queries", []),
             "used_precedent_query": enrichment.get("used_precedent_query"),
@@ -459,6 +509,7 @@ class RequestPipeline:
             }
             if primary_law
             else None,
+            "related_laws": enrichment.get("related_laws", []),
             "version": {
                 "source_target": version.get("source_target"),
                 "effective_date": version_fields.get("시행일자"),
@@ -499,13 +550,24 @@ class RequestPipeline:
                 mode = "multi_agent"
 
             search_queries = self._law_search_queries(req.user_query)
+            related_law_queries = self._related_law_queries(req.user_query)
             law_data: Dict[str, Any] = {}
             used_search_query: Optional[str] = None
+            search_datasets: List[Dict[str, Any]] = []
             for search_query in search_queries:
-                law_data = self.law_api.search_law(search_query)
-                if law_data and self._extract_law_items(law_data):
+                result = self.law_api.search_law(search_query)
+                if result and self._extract_law_items(result):
+                    search_datasets.append(result)
+                    law_data = result
                     used_search_query = search_query
                     break
+            for related_query in related_law_queries:
+                result = self.law_api.search_law(related_query)
+                if result and self._extract_law_items(result):
+                    search_datasets.append(result)
+
+            if search_datasets:
+                law_data = self._merge_law_results(search_datasets)
 
             if not law_data or not self._extract_law_items(law_data):
                 raise PipelineStageError("LawAPI", "empty_law_data")
@@ -517,6 +579,7 @@ class RequestPipeline:
                 risk_level=risk_level,
             )
             law_enrichment["search_queries"] = search_queries
+            law_enrichment["related_law_queries"] = related_law_queries
             law_enrichment["used_search_query"] = used_search_query
             law_enrichment["prompt_policy"] = prompt_policy.as_dict()
             enriched_context = self._merge_context(req.context, self._law_context_lines(law_enrichment))

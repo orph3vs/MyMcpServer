@@ -14,6 +14,18 @@ class FakeLawApiOk:
 
     def search_law(self, query):
         self.search_queries.append(query)
+        if query == "공동주택관리법":
+            return {
+                "LawSearch": {
+                    "law": [
+                        {
+                            "법령ID": "012345",
+                            "법령명한글": "공동주택관리법",
+                            "법령일련번호": "280069",
+                        }
+                    ]
+                }
+            }
         return {
             "LawSearch": {
                 "law": [
@@ -282,6 +294,25 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertIsNone(result.error)
             self.assertEqual(result.mode, "multi_agent")
             self.assertTrue(result.citations["prompt_policy"]["prefer_multi_agent_for_risky_queries"])
+
+    def test_process_collects_related_laws_for_apartment_question(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = CostLogger(db_path=str(Path(tmp) / "cost_logs.db"))
+            law_api = FakeLawApiOk()
+            pipeline = RequestPipeline(law_api=law_api, logger=logger)
+
+            result = pipeline.process(
+                PipelineRequest(
+                    user_query="아파트 입주자 명부에 소유자 정보를 수집하는 경우 위법인지 설명해줘",
+                    context="기준시점: 2026-03-13",
+                )
+            )
+
+            self.assertIsNone(result.error)
+            self.assertIn("공동주택관리법", law_api.search_queries)
+            related_laws = result.citations["law_context"]["related_laws"]
+            self.assertTrue(any(item["law_name"] == "공동주택관리법" for item in related_laws))
+            self.assertIn("related_law_queries", result.citations["law_context"])
 
     def test_process_error_path_logs(self):
         with tempfile.TemporaryDirectory() as tmp:

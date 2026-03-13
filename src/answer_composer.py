@@ -327,6 +327,8 @@ class AnswerComposer:
         precedent_note = cls._precedent_note(law_enrichment.get("precedent_detail") or {})
         if precedent_note:
             lines.append(f"- 판례 요지: {precedent_note}")
+        if relevance_note and precedent_note:
+            lines.append(f"- 해석상 의미: 이 판례는 {relevance_note}라는 점에서 현재 질문의 판단 기준을 보완합니다.")
         return "\n".join(lines)
 
     @classmethod
@@ -336,12 +338,12 @@ class AnswerComposer:
 
         if review_summary.get("has_conflict"):
             return (
-                "현재 확보된 법령, 판례, 리스크 검토 신호를 함께 보면 단정적으로 결론내리기보다 "
-                "사실관계와 예외 사유를 추가 확인하는 방향이 더 안전합니다."
+                "현재 확보된 법령, 판례, 리스크 검토 신호를 함께 보면 바로 결론을 단정하기보다 "
+                "사실관계와 예외 사유를 한 번 더 확인하는 방향이 더 안전합니다."
             )
         if risk_level == "HIGH" and review_summary.get("requires_caution"):
             return (
-                "이 사안은 고위험 질문으로 분류되어, 답변은 조문과 판례를 중심으로 보수적으로 이해하는 편이 안전합니다."
+                "이 사안은 고위험 질문으로 분류되어, 조문과 판례를 중심으로 이해하되 단정적 표현은 줄여서 보는 편이 안전합니다."
             )
         return None
 

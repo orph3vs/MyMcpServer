@@ -276,3 +276,7 @@
 - 2026-03-13: Prompt files were upgraded to reflect statute-first, precedent-as-support, conflict-aware, evidence-mapped answer rules.
 - 2026-03-13: Prompt policy extraction is now applied in the request pipeline for mode selection, validation, and response citations.
 - 2026-03-13: Full test suite passed after prompt integration (`Ran 59 tests`, `OK`).
+- 2026-03-13: Final answer polish improved precedent block readability by adding a short interpretation meaning when relevance and precedent gist are both available.
+- 2026-03-13: Full test suite passed after answer-polish updates (`Ran 59 tests`, `OK`).
+- 2026-03-13: Request pipeline now searches related laws together for domain-heavy questions (e.g. 공동주택관리법, 위치정보법, 정보통신망법, 신용정보법) instead of relying on one primary law only.
+- 2026-03-13: Full test suite passed after related-law expansion (`Ran 60 tests`, `OK`).
