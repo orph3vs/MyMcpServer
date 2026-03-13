@@ -1,9 +1,4 @@
-"""End-to-end request pipeline.
-
-Flow:
-User -> RiskClassifier -> PromptBuilder -> LawAPI -> AgentEngine
--> Validator -> Scorer -> Logger -> Response
-"""
+"""End-to-end request pipeline."""
 
 from __future__ import annotations
 
@@ -58,6 +53,15 @@ class RequestPipeline:
         "illegality": ("위법", "불법", "허용", "가능한지", "문제되는지", "판단"),
         "applicability": ("적용", "대상", "포함", "제외"),
     }
+    _PRECEDENT_REQUEST_KEYWORDS = (
+        "판례",
+        "대법원",
+        "법원은",
+        "유사 사례",
+        "관련 사례",
+        "사례도",
+        "판결",
+    )
 
     def __init__(
         self,
@@ -116,25 +120,35 @@ class RequestPipeline:
         return []
 
     @staticmethod
+    def _extract_precedent_items(precedent_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not isinstance(precedent_data, dict):
+            return []
+
+        items = precedent_data.get("prec")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+        if isinstance(items, dict):
+            return [items]
+
+        nested = precedent_data.get("PrecSearch")
+        if isinstance(nested, dict):
+            nested_items = nested.get("prec")
+            if isinstance(nested_items, list):
+                return [item for item in nested_items if isinstance(item, dict)]
+            if isinstance(nested_items, dict):
+                return [nested_items]
+
+        return []
+
+    @staticmethod
     def _pick_primary_law(law_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         items = RequestPipeline._extract_law_items(law_data)
         if not items:
             return None
 
         primary = items[0]
-        law_id = (
-            primary.get("법령ID")
-            or primary.get("법령 일련번호")
-            or primary.get("법령일련번호")
-            or primary.get("id")
-        )
-        law_name = (
-            primary.get("법령명한글")
-            or primary.get("법령 명한글")
-            or primary.get("법령명_한글")
-            or primary.get("name")
-        )
-
+        law_id = primary.get("법령ID") or primary.get("법령일련번호") or primary.get("id")
+        law_name = primary.get("법령명한글") or primary.get("법령명_한글") or primary.get("name")
         return {
             "law_id": str(law_id).strip() if law_id is not None else None,
             "law_name": str(law_name).strip() if law_name is not None else None,
@@ -148,6 +162,11 @@ class RequestPipeline:
             if any(keyword in normalized for keyword in cls._QUESTION_INTENT_KEYWORDS[intent]):
                 return intent
         return "explain"
+
+    @classmethod
+    def _wants_precedents(cls, user_query: str) -> bool:
+        normalized = cls._clean_text(user_query)
+        return any(keyword in normalized for keyword in cls._PRECEDENT_REQUEST_KEYWORDS)
 
     @staticmethod
     def _extract_article_numbers(question: str) -> List[str]:
@@ -192,11 +211,7 @@ class RequestPipeline:
             queries.append(re.sub(r"\s+", " ", law_name_match.group(1)).strip())
 
         simplified = re.sub(r"제\s*\d+\s*조(?:의\s*\d+)?", "", normalized)
-        simplified = re.sub(
-            r"\b(설명|해설|알려줘|알려 주세요|알려주세요|보여줘|요약|해석|뜻|뭐야)\b",
-            "",
-            simplified,
-        )
+        simplified = re.sub(r"\b(설명|해설|알려줘|알려 주세요|알려주세요|보여줘|요약|해석|뜻|뭐야)\b", "", simplified)
         simplified = re.sub(r"\s+", " ", simplified).strip(" ,")
         if simplified:
             queries.append(simplified)
@@ -211,12 +226,42 @@ class RequestPipeline:
                 deduped.append(query)
         return deduped
 
+    @classmethod
+    def _precedent_search_queries(
+        cls,
+        user_query: str,
+        used_search_query: Optional[str],
+        article_numbers: List[str],
+    ) -> List[str]:
+        queries: List[str] = []
+        if used_search_query and article_numbers:
+            for article_no in article_numbers[:2]:
+                queries.append(f"{used_search_query} {article_no}")
+        if used_search_query:
+            queries.append(f"{used_search_query} 판례")
+        queries.append(user_query)
+
+        deduped: List[str] = []
+        seen = set()
+        for query in queries:
+            normalized = cls._clean_text(query)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                deduped.append(normalized)
+        return deduped
+
     def _fetch_article(self, law_id: str, article_no: str) -> Dict[str, Any]:
         if not hasattr(self.law_api, "get_article"):
             return {}
         return self.law_api.get_article(law_id=law_id, article_no=article_no)
 
-    def _build_law_enrichment(self, user_query: str, law_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_law_enrichment(
+        self,
+        user_query: str,
+        law_data: Dict[str, Any],
+        used_search_query: Optional[str] = None,
+        risk_level: str = "LOW",
+    ) -> Dict[str, Any]:
         primary_law = self._pick_primary_law(law_data)
         enrichment: Dict[str, Any] = {
             "search_hit_count": len(self._extract_law_items(law_data)),
@@ -232,16 +277,14 @@ class RequestPipeline:
         if hasattr(self.law_api, "get_version"):
             try:
                 enrichment["version"] = self.law_api.get_version(law_id)
-            except Exception as exc:  # defensive enrichment only
+            except Exception as exc:
                 enrichment["version_error"] = str(exc)
 
-        if not article_numbers:
-            return enrichment
-
-        try:
-            enrichment["article"] = self._fetch_article(law_id=law_id, article_no=article_numbers[0])
-        except Exception as exc:  # defensive enrichment only
-            enrichment["article_error"] = str(exc)
+        if article_numbers:
+            try:
+                enrichment["article"] = self._fetch_article(law_id=law_id, article_no=article_numbers[0])
+            except Exception as exc:
+                enrichment["article_error"] = str(exc)
 
         related_articles: List[Dict[str, Any]] = []
         should_fetch_related = intent in {"difference", "procedure", "applicability"} or len(article_numbers) > 1
@@ -249,13 +292,52 @@ class RequestPipeline:
             for related_article_no in article_numbers[1:4]:
                 try:
                     related_article = self._fetch_article(law_id=law_id, article_no=related_article_no)
-                except Exception as exc:  # defensive enrichment only
+                except Exception as exc:
                     related_articles.append({"article_no": related_article_no, "found": False, "error": str(exc)})
                     continue
                 related_articles.append(related_article)
-
         if related_articles:
             enrichment["related_articles"] = related_articles
+
+        should_search_precedent = (
+            risk_level == "HIGH"
+            or intent in {"illegality", "applicability"}
+            or self._wants_precedents(user_query)
+        )
+        if should_search_precedent and hasattr(self.law_api, "search_precedent"):
+            precedent_queries = self._precedent_search_queries(user_query, used_search_query, article_numbers)
+            reference_law = primary_law.get("law_name")
+            precedent_data: Dict[str, Any] = {}
+            used_precedent_query: Optional[str] = None
+            for precedent_query in precedent_queries:
+                try:
+                    precedent_data = self.law_api.search_precedent(precedent_query, reference_law=reference_law)
+                except TypeError:
+                    precedent_data = self.law_api.search_precedent(precedent_query)
+                except Exception as exc:
+                    enrichment["precedent_error"] = str(exc)
+                    precedent_data = {}
+                    break
+                if precedent_data and self._extract_precedent_items(precedent_data):
+                    used_precedent_query = precedent_query
+                    break
+
+            if precedent_data and self._extract_precedent_items(precedent_data):
+                enrichment["precedent_search"] = precedent_data
+                enrichment["precedent_search_queries"] = precedent_queries
+                enrichment["used_precedent_query"] = used_precedent_query
+                primary_precedent = self._extract_precedent_items(precedent_data)[0]
+                enrichment["primary_precedent"] = primary_precedent
+                precedent_id = (
+                    primary_precedent.get("판례일련번호")
+                    or primary_precedent.get("사건번호")
+                    or primary_precedent.get("id")
+                )
+                if precedent_id and hasattr(self.law_api, "get_precedent"):
+                    try:
+                        enrichment["precedent_detail"] = self.law_api.get_precedent(str(precedent_id))
+                    except Exception as exc:
+                        enrichment["precedent_detail_error"] = str(exc)
 
         return enrichment
 
@@ -286,12 +368,23 @@ class RequestPipeline:
             lines.append(f"관련 조문: {article['article_no']}")
             lines.append(f"조문 요약: {RequestPipeline._truncate_text(article['article_text'])}")
 
-        related_articles = enrichment.get("related_articles") or []
         valid_related = [
-            related for related in related_articles if isinstance(related, dict) and related.get("found") and related.get("article_no")
+            related
+            for related in enrichment.get("related_articles") or []
+            if isinstance(related, dict) and related.get("found") and related.get("article_no")
         ]
         if valid_related:
             lines.append("추가 확인 조문: " + ", ".join(str(article["article_no"]) for article in valid_related[:3]))
+
+        primary_precedent = enrichment.get("primary_precedent") or {}
+        if primary_precedent:
+            precedent_name = (
+                primary_precedent.get("사건명")
+                or primary_precedent.get("판례명")
+                or primary_precedent.get("사건번호")
+            )
+            if precedent_name:
+                lines.append(f"참고 판례: {precedent_name}")
 
         return lines
 
@@ -303,13 +396,12 @@ class RequestPipeline:
             results.append(
                 {
                     "law_id": item.get("법령ID") or item.get("id"),
-                    "law_name": item.get("법령명한글") or item.get("법령 명한글") or item.get("법령명_한글"),
+                    "law_name": item.get("법령명한글") or item.get("법령명_한글"),
                     "law_type": item.get("법령구분명"),
                     "effective_date": item.get("시행일자"),
                     "promulgation_date": item.get("공포일자"),
                 }
             )
-
         return {
             "used_search_query": used_search_query,
             "search_hit_count": len(items),
@@ -338,10 +430,22 @@ class RequestPipeline:
             for summary in (cls._summarize_article(article) for article in enrichment.get("related_articles") or [])
             if summary
         ]
+        primary_precedent = enrichment.get("primary_precedent") or {}
+        precedent_summary = None
+        if primary_precedent:
+            precedent_summary = {
+                "precedent_id": primary_precedent.get("판례일련번호") or primary_precedent.get("id"),
+                "case_no": primary_precedent.get("사건번호"),
+                "case_name": primary_precedent.get("사건명") or primary_precedent.get("판례명"),
+                "court_name": primary_precedent.get("법원명"),
+                "decision_date": primary_precedent.get("선고일자"),
+            }
 
         return {
             "search_queries": enrichment.get("search_queries", []),
             "used_search_query": enrichment.get("used_search_query"),
+            "precedent_search_queries": enrichment.get("precedent_search_queries", []),
+            "used_precedent_query": enrichment.get("used_precedent_query"),
             "primary_law": {
                 "law_id": primary_law.get("law_id"),
                 "law_name": primary_law.get("law_name"),
@@ -358,6 +462,7 @@ class RequestPipeline:
             else None,
             "article": article_summary,
             "related_articles": related_summaries,
+            "precedent": precedent_summary,
         }
 
     def process(self, req: PipelineRequest) -> PipelineResponse:
@@ -375,10 +480,7 @@ class RequestPipeline:
             risk_level = risk.risk_level
             mode = "multi_agent" if risk_level == "HIGH" else "single_agent"
 
-            prompt_payload = build_request_prompt(
-                user_query=req.user_query,
-                context=req.context,
-            )
+            prompt_payload = build_request_prompt(user_query=req.user_query, context=req.context)
             if not prompt_payload.get("system") or not prompt_payload.get("user"):
                 raise PipelineStageError("PromptBuilder", "invalid_prompt_payload")
 
@@ -394,7 +496,12 @@ class RequestPipeline:
             if not law_data or not self._extract_law_items(law_data):
                 raise PipelineStageError("LawAPI", "empty_law_data")
 
-            law_enrichment = self._build_law_enrichment(req.user_query, law_data)
+            law_enrichment = self._build_law_enrichment(
+                req.user_query,
+                law_data,
+                used_search_query=used_search_query,
+                risk_level=risk_level,
+            )
             law_enrichment["search_queries"] = search_queries
             law_enrichment["used_search_query"] = used_search_query
             enriched_context = self._merge_context(req.context, self._law_context_lines(law_enrichment))
@@ -402,6 +509,8 @@ class RequestPipeline:
             agent_result = self.agent_engine.run(
                 question=req.user_query,
                 context=enriched_context,
+                risk_level=risk_level,
+                law_enrichment=law_enrichment,
             )
             answer = self.answer_composer.compose(
                 AnswerCompositionInput(
@@ -432,7 +541,6 @@ class RequestPipeline:
 
             latency = round((time.perf_counter() - started) * 1000, 3)
             cost = self._estimate_cost(tokens_in=tokens_in, tokens_out=tokens_out)
-
             self.logger.log_request(
                 CostLogEntry(
                     request_id=request_id,
@@ -481,7 +589,7 @@ class RequestPipeline:
                 latency_ms=latency,
                 error={"stage": exc.stage, "message": exc.message},
             )
-        except Exception as exc:  # defensive fallback
+        except Exception as exc:
             latency = round((time.perf_counter() - started) * 1000, 3)
             cost = self._estimate_cost(tokens_in=tokens_in, tokens_out=tokens_out)
             self.logger.log_request(

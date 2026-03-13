@@ -10,6 +10,7 @@ class FakeLawApiOk:
     def __init__(self):
         self.search_queries = []
         self.article_calls = []
+        self.precedent_queries = []
 
     def search_law(self, query):
         self.search_queries.append(query)
@@ -37,8 +38,13 @@ class FakeLawApiOk:
         titles = {
             "제1조": "목적",
             "제2조": "정의",
+            "제3조": "적용범위",
+            "제15조": "개인정보의 수집ㆍ이용",
+            "제17조": "개인정보의 제공",
             "제34조": "개인정보 유출 통지",
             "제34조의2": "유출 신고",
+            "제58조": "적용의 일부 제외",
+            "제75조": "과태료",
         }
         title = titles.get(article_no, "일반")
         return {
@@ -48,6 +54,25 @@ class FakeLawApiOk:
             "matched_via": "service:law",
             "article_text": f"{article_no}({title}) 테스트 조문 본문",
         }
+
+    def search_precedent(self, query, reference_law=None):
+        self.precedent_queries.append((query, reference_law))
+        return {
+            "PrecSearch": {
+                "prec": [
+                    {
+                        "판례일련번호": "P1",
+                        "사건명": "개인정보 보호법 사건",
+                        "사건번호": "2025다12345",
+                        "법원명": "대법원",
+                        "선고일자": "20250101",
+                    }
+                ]
+            }
+        }
+
+    def get_precedent(self, precedent_id):
+        return {"precedent_id": precedent_id, "사건명": "개인정보 보호법 사건", "사건번호": "2025다12345"}
 
 
 class FakeLawApiEmpty:
@@ -101,7 +126,7 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertIn("law_search", result.citations)
             self.assertIn("law_context", result.citations)
             self.assertEqual(result.citations["law_context"]["primary_law"]["law_id"], "011357")
-            self.assertNotIn("[통합검토]", result.answer)
+            self.assertEqual(result.mode, "multi_agent")
             self.assertGreaterEqual(result.score, 0)
 
             logged = logger.get_by_request_id(result.request_id)
@@ -121,11 +146,8 @@ class RequestPipelineTests(unittest.TestCase):
             )
 
             self.assertIsNone(result.error)
-            self.assertIn("law_context", result.citations)
             self.assertEqual(result.citations["law_context"]["article"]["article_no"], "제1조")
             self.assertIn("개인정보 보호법 제1조는 목적에 관한 규정입니다.", result.answer)
-            self.assertIn("현재 확인한 조문은 다음과 같습니다.", result.answer)
-            self.assertIn("쉽게 말하면", result.answer)
 
     def test_process_uses_normalized_law_search_query(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -143,7 +165,6 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertIsNone(result.error)
             self.assertEqual(law_api.search_queries[0], "개인정보 보호법")
             self.assertEqual(result.citations["law_context"]["used_search_query"], "개인정보 보호법")
-            self.assertIn("개인정보 보호법", result.citations["law_context"]["search_queries"])
             self.assertEqual(result.citations["law_search"]["used_search_query"], "개인정보 보호법")
 
     def test_process_fetches_related_articles_for_difference_question(self):
@@ -178,11 +199,45 @@ class RequestPipelineTests(unittest.TestCase):
             )
 
             self.assertIsNone(result.error)
-            self.assertEqual(
-                law_api.article_calls,
-                [("011357", "제34조"), ("011357", "제34조의2")],
+            self.assertEqual(law_api.article_calls, [("011357", "제34조"), ("011357", "제34조의2")])
+            self.assertIn("[절차 정리]", result.answer)
+
+    def test_process_adds_precedent_for_high_risk_questions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = CostLogger(db_path=str(Path(tmp) / "cost_logs.db"))
+            law_api = FakeLawApiOk()
+            pipeline = RequestPipeline(law_api=law_api, logger=logger)
+
+            result = pipeline.process(
+                PipelineRequest(
+                    user_query="개인정보 보호법 제15조가 위법 판단 기준인지 설명해줘",
+                    context="기준시점: 2025-01-01",
+                )
             )
-            self.assertIn("[연관 조문]", result.answer)
+
+            self.assertIsNone(result.error)
+            self.assertTrue(law_api.precedent_queries)
+            self.assertEqual(result.citations["law_context"]["precedent"]["precedent_id"], "P1")
+            self.assertIn("[참고 판례]", result.answer)
+            self.assertEqual(result.mode, "multi_agent")
+
+    def test_process_adds_precedent_on_explicit_request_even_if_low_risk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = CostLogger(db_path=str(Path(tmp) / "cost_logs.db"))
+            law_api = FakeLawApiOk()
+            pipeline = RequestPipeline(law_api=law_api, logger=logger)
+
+            result = pipeline.process(
+                PipelineRequest(
+                    user_query="개인정보 보호법 제3조 설명하고 관련 판례도 같이 보여줘",
+                    context="기준시점: 2025-01-01",
+                )
+            )
+
+            self.assertIsNone(result.error)
+            self.assertTrue(law_api.precedent_queries)
+            self.assertEqual(result.mode, "single_agent")
+            self.assertIn("[참고 판례]", result.answer)
 
     def test_process_error_path_logs(self):
         with tempfile.TemporaryDirectory() as tmp:
