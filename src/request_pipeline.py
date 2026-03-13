@@ -51,6 +51,14 @@ class PipelineStageError(RuntimeError):
 class RequestPipeline:
     """Coordinates all modules into one deterministic processing flow."""
 
+    _QUESTION_INTENT_KEYWORDS = {
+        "difference": ("차이", "구분", "비교", "다른 점"),
+        "requirements": ("요건", "조건", "기준", "해당", "충족"),
+        "procedure": ("절차", "방법", "순서", "어떻게", "진행"),
+        "illegality": ("위법", "불법", "허용", "가능한지", "문제되는지", "판단"),
+        "applicability": ("적용", "대상", "포함", "제외"),
+    }
+
     def __init__(
         self,
         risk_classifier: Optional[RiskClassifier] = None,
@@ -81,6 +89,10 @@ class RequestPipeline:
         if len(compact) <= max_chars:
             return compact
         return compact[: max_chars - 3].rstrip() + "..."
+
+    @staticmethod
+    def _clean_text(text: str) -> str:
+        return re.sub(r"\s+", " ", text or "").strip()
 
     @staticmethod
     def _extract_law_items(law_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -129,16 +141,32 @@ class RequestPipeline:
             "raw": primary,
         }
 
+    @classmethod
+    def _question_intent(cls, user_query: str) -> str:
+        normalized = cls._clean_text(user_query)
+        for intent in ("difference", "illegality", "requirements", "procedure", "applicability"):
+            if any(keyword in normalized for keyword in cls._QUESTION_INTENT_KEYWORDS[intent]):
+                return intent
+        return "explain"
+
     @staticmethod
-    def _extract_article_no(question: str) -> Optional[str]:
-        match = re.search(r"제\s*(\d+)\s*조(?:\s*의\s*(\d+))?", question)
-        if not match:
-            return None
-        main_no = match.group(1)
-        sub_no = match.group(2)
-        if sub_no:
-            return f"제{int(main_no)}조의{int(sub_no)}"
-        return f"제{int(main_no)}조"
+    def _extract_article_numbers(question: str) -> List[str]:
+        matches = re.findall(r"제\s*(\d+)\s*조(?:의\s*(\d+))?", question)
+        results: List[str] = []
+        seen = set()
+        for main_no, sub_no in matches:
+            article_no = f"제{int(main_no)}조"
+            if sub_no:
+                article_no = f"{article_no}의{int(sub_no)}"
+            if article_no not in seen:
+                seen.add(article_no)
+                results.append(article_no)
+        return results
+
+    @classmethod
+    def _extract_article_no(cls, question: str) -> Optional[str]:
+        article_numbers = cls._extract_article_numbers(question)
+        return article_numbers[0] if article_numbers else None
 
     @staticmethod
     def _merge_context(base_context: Optional[str], lines: List[str]) -> Optional[str]:
@@ -156,16 +184,19 @@ class RequestPipeline:
             return []
 
         queries: List[str] = []
-
         law_name_match = re.search(
-            r"([가-힣A-Za-z0-9 ]+?(?:법 시행규칙|법 시행령|법|시행령|시행규칙))",
+            r"([가-힣A-Za-z0-9 ]+?(?:법 시행규칙|법 시행령|법|시행규칙|시행령))",
             normalized,
         )
         if law_name_match:
             queries.append(re.sub(r"\s+", " ", law_name_match.group(1)).strip())
 
-        simplified = re.sub(r"제\s*\d+\s*조(?:\s*의\s*\d+)?", "", normalized)
-        simplified = re.sub(r"\b(설명|해설|알려줘|알려 주세요|알려줘요|보여줘|요약|의미|뭐야|무엇인가)\b", "", simplified)
+        simplified = re.sub(r"제\s*\d+\s*조(?:의\s*\d+)?", "", normalized)
+        simplified = re.sub(
+            r"\b(설명|해설|알려줘|알려 주세요|알려주세요|보여줘|요약|해석|뜻|뭐야)\b",
+            "",
+            simplified,
+        )
         simplified = re.sub(r"\s+", " ", simplified).strip(" ,")
         if simplified:
             queries.append(simplified)
@@ -180,6 +211,11 @@ class RequestPipeline:
                 deduped.append(query)
         return deduped
 
+    def _fetch_article(self, law_id: str, article_no: str) -> Dict[str, Any]:
+        if not hasattr(self.law_api, "get_article"):
+            return {}
+        return self.law_api.get_article(law_id=law_id, article_no=article_no)
+
     def _build_law_enrichment(self, user_query: str, law_data: Dict[str, Any]) -> Dict[str, Any]:
         primary_law = self._pick_primary_law(law_data)
         enrichment: Dict[str, Any] = {
@@ -190,7 +226,8 @@ class RequestPipeline:
             return enrichment
 
         law_id = primary_law["law_id"]
-        article_no = self._extract_article_no(user_query)
+        article_numbers = self._extract_article_numbers(user_query)
+        intent = self._question_intent(user_query)
 
         if hasattr(self.law_api, "get_version"):
             try:
@@ -198,11 +235,27 @@ class RequestPipeline:
             except Exception as exc:  # defensive enrichment only
                 enrichment["version_error"] = str(exc)
 
-        if article_no and hasattr(self.law_api, "get_article"):
-            try:
-                enrichment["article"] = self.law_api.get_article(law_id=law_id, article_no=article_no)
-            except Exception as exc:  # defensive enrichment only
-                enrichment["article_error"] = str(exc)
+        if not article_numbers:
+            return enrichment
+
+        try:
+            enrichment["article"] = self._fetch_article(law_id=law_id, article_no=article_numbers[0])
+        except Exception as exc:  # defensive enrichment only
+            enrichment["article_error"] = str(exc)
+
+        related_articles: List[Dict[str, Any]] = []
+        should_fetch_related = intent in {"difference", "procedure", "applicability"} or len(article_numbers) > 1
+        if should_fetch_related:
+            for related_article_no in article_numbers[1:4]:
+                try:
+                    related_article = self._fetch_article(law_id=law_id, article_no=related_article_no)
+                except Exception as exc:  # defensive enrichment only
+                    related_articles.append({"article_no": related_article_no, "found": False, "error": str(exc)})
+                    continue
+                related_articles.append(related_article)
+
+        if related_articles:
+            enrichment["related_articles"] = related_articles
 
         return enrichment
 
@@ -219,7 +272,7 @@ class RequestPipeline:
         if isinstance(version, dict):
             version_fields = version.get("version_fields") or {}
             enacted = version_fields.get("시행일자")
-            promulgated = version_fields.get("공포일자")
+            promulgated = version_fields.get("공포일자") or version_fields.get("공포 일자")
             revision_type = version_fields.get("제개정구분명") or version_fields.get("제개정구분")
             if enacted:
                 lines.append(f"시행일자: {enacted}")
@@ -232,6 +285,13 @@ class RequestPipeline:
         if isinstance(article, dict) and article.get("found") and article.get("article_text"):
             lines.append(f"관련 조문: {article['article_no']}")
             lines.append(f"조문 요약: {RequestPipeline._truncate_text(article['article_text'])}")
+
+        related_articles = enrichment.get("related_articles") or []
+        valid_related = [
+            related for related in related_articles if isinstance(related, dict) and related.get("found") and related.get("article_no")
+        ]
+        if valid_related:
+            lines.append("추가 확인 조문: " + ", ".join(str(article["article_no"]) for article in valid_related[:3]))
 
         return lines
 
@@ -257,20 +317,27 @@ class RequestPipeline:
         }
 
     @staticmethod
-    def _summarize_law_enrichment(enrichment: Dict[str, Any]) -> Dict[str, Any]:
+    def _summarize_article(article: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(article, dict) or not article.get("found"):
+            return None
+        return {
+            "article_no": article.get("article_no"),
+            "found": True,
+            "matched_via": article.get("matched_via"),
+            "article_text_excerpt": RequestPipeline._truncate_text(str(article.get("article_text", "")), 180),
+        }
+
+    @classmethod
+    def _summarize_law_enrichment(cls, enrichment: Dict[str, Any]) -> Dict[str, Any]:
         primary_law = enrichment.get("primary_law") or {}
         version = enrichment.get("version") or {}
         version_fields = version.get("version_fields") or {}
-        article = enrichment.get("article") or {}
-
-        article_summary = None
-        if isinstance(article, dict) and article.get("found"):
-            article_summary = {
-                "article_no": article.get("article_no"),
-                "found": True,
-                "matched_via": article.get("matched_via"),
-                "article_text_excerpt": RequestPipeline._truncate_text(str(article.get("article_text", "")), 180),
-            }
+        article_summary = cls._summarize_article(enrichment.get("article") or {})
+        related_summaries = [
+            summary
+            for summary in (cls._summarize_article(article) for article in enrichment.get("related_articles") or [])
+            if summary
+        ]
 
         return {
             "search_queries": enrichment.get("search_queries", []),
@@ -284,12 +351,13 @@ class RequestPipeline:
             "version": {
                 "source_target": version.get("source_target"),
                 "effective_date": version_fields.get("시행일자"),
-                "promulgation_date": version_fields.get("공포일자"),
+                "promulgation_date": version_fields.get("공포일자") or version_fields.get("공포 일자"),
                 "revision_type": version_fields.get("제개정구분명") or version_fields.get("제개정구분"),
             }
             if version
             else None,
             "article": article_summary,
+            "related_articles": related_summaries,
         }
 
     def process(self, req: PipelineRequest) -> PipelineResponse:
@@ -303,12 +371,10 @@ class RequestPipeline:
         score = 0.0
 
         try:
-            # 1) RiskClassifier
             risk = self.risk_classifier.classify(req.user_query)
             risk_level = risk.risk_level
             mode = "multi_agent" if risk_level == "HIGH" else "single_agent"
 
-            # 2) PromptBuilder
             prompt_payload = build_request_prompt(
                 user_query=req.user_query,
                 context=req.context,
@@ -316,7 +382,6 @@ class RequestPipeline:
             if not prompt_payload.get("system") or not prompt_payload.get("user"):
                 raise PipelineStageError("PromptBuilder", "invalid_prompt_payload")
 
-            # 3) LawAPI
             search_queries = self._law_search_queries(req.user_query)
             law_data: Dict[str, Any] = {}
             used_search_query: Optional[str] = None
@@ -328,12 +393,12 @@ class RequestPipeline:
 
             if not law_data or not self._extract_law_items(law_data):
                 raise PipelineStageError("LawAPI", "empty_law_data")
+
             law_enrichment = self._build_law_enrichment(req.user_query, law_data)
             law_enrichment["search_queries"] = search_queries
             law_enrichment["used_search_query"] = used_search_query
             enriched_context = self._merge_context(req.context, self._law_context_lines(law_enrichment))
 
-            # 4) AgentEngine
             agent_result = self.agent_engine.run(
                 question=req.user_query,
                 context=enriched_context,
@@ -349,14 +414,12 @@ class RequestPipeline:
             )
             tokens_out = len(answer.split())
 
-            # 5) Validator
             citations = {
                 "law_search": self._summarize_search_results(law_data, used_search_query),
                 "law_context": self._summarize_law_enrichment(law_enrichment),
             }
             self._validate(answer=answer, citations=citations)
 
-            # 6) Scorer
             score_result = self.scorer.calculate(
                 ConfidenceInput(
                     evidence_fidelity=0.8 if citations else 0.0,
@@ -370,7 +433,6 @@ class RequestPipeline:
             latency = round((time.perf_counter() - started) * 1000, 3)
             cost = self._estimate_cost(tokens_in=tokens_in, tokens_out=tokens_out)
 
-            # 7) Logger
             self.logger.log_request(
                 CostLogEntry(
                     request_id=request_id,
@@ -384,7 +446,6 @@ class RequestPipeline:
                 )
             )
 
-            # 8) Response
             return PipelineResponse(
                 request_id=request_id,
                 risk_level=risk_level,

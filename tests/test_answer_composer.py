@@ -27,13 +27,16 @@ class AnswerComposerTests(unittest.TestCase):
         )
 
         self.assertIn("개인정보 보호법 제1조는 목적에 관한 규정입니다.", result)
-        self.assertIn("현재 확인된 조문은 다음과 같습니다.", result)
-        self.assertIn("쉽게 말하면", result)
+        self.assertIn("현재 확인한 조문은 다음과 같습니다.", result)
+        self.assertIn("쉽게 말하면 이 조문은 개인정보 보호법이 왜 존재하는지", result)
+        self.assertIn("[근거]", result)
+        self.assertIn("- 법령: 개인정보 보호법", result)
+        self.assertIn("- 조문: 제1조", result)
 
     def test_compose_article_answer_for_high_risk_sanction_article(self):
         result = self.composer.compose(
             AnswerCompositionInput(
-                user_query="벌칙 조항 설명",
+                user_query="벌칙 조항 위법 여부 설명",
                 prompt_payload={"system": "x", "user": "y"},
                 law_enrichment={
                     "primary_law": {"law_name": "개인정보 보호법"},
@@ -41,7 +44,7 @@ class AnswerComposerTests(unittest.TestCase):
                     "article": {
                         "found": True,
                         "article_no": "제75조",
-                        "article_text": "제75조(벌칙) 다음 각 호의 어느 하나에 해당하는 자는 처벌한다.",
+                        "article_text": "제75조(과태료) 다음 각 호의 어느 하나에 해당하는 자에게 과태료를 부과한다.",
                     },
                 },
                 risk_level="HIGH",
@@ -49,8 +52,9 @@ class AnswerComposerTests(unittest.TestCase):
             )
         )
 
-        self.assertIn("책임이나 제재 기준", result)
-        self.assertIn("사실관계와 요건 충족 여부", result)
+        self.assertIn("위법 여부를 판단할 때 참고해야 할 기준", result)
+        self.assertIn("제재 기준을 정한 조문", result)
+        self.assertIn("사실관계, 주체, 시점, 예외 사유를 함께 확인", result)
 
     def test_compose_fallback_for_related_law_without_article(self):
         result = self.composer.compose(
@@ -60,6 +64,7 @@ class AnswerComposerTests(unittest.TestCase):
                 law_enrichment={
                     "primary_law": {"law_name": "개인정보 보호법"},
                     "version": {"version_fields": {"시행일자": "20251002"}},
+                    "used_search_query": "개인정보 보호법",
                 },
                 risk_level="HIGH",
                 fallback_answer="",
@@ -67,8 +72,9 @@ class AnswerComposerTests(unittest.TestCase):
         )
 
         self.assertIn("질문과 가장 관련된 법령은 개인정보 보호법입니다.", result)
-        self.assertIn("현재 확인된 시행일자는 20251002입니다.", result)
-        self.assertIn("사실관계와 관련 조문", result)
+        self.assertIn("현재 확인한 시행일자는 20251002입니다.", result)
+        self.assertIn("구체적 사실관계와 관련 조문", result)
+        self.assertIn("- 검색 기준: 개인정보 보호법", result)
 
     def test_compose_article_answer_for_scope_article(self):
         result = self.composer.compose(
@@ -81,7 +87,7 @@ class AnswerComposerTests(unittest.TestCase):
                     "article": {
                         "found": True,
                         "article_no": "제3조",
-                        "article_text": "제3조(적용범위) 이 법은 공공기관과 사업자에 적용한다.",
+                        "article_text": "제3조(적용범위) 이 법은 국가기관과 공공기관에 적용한다.",
                     },
                 },
                 risk_level="LOW",
@@ -89,7 +95,8 @@ class AnswerComposerTests(unittest.TestCase):
             )
         )
 
-        self.assertIn("적용 범위를 분명하게 하는 조문", result)
+        self.assertIn("적용되는지 가늠할 때 기준이 되는 조문", result)
+        self.assertIn("범위를 정해주는 조문", result)
 
     def test_compose_high_risk_fallback_without_version_is_cautious(self):
         result = self.composer.compose(
@@ -105,10 +112,10 @@ class AnswerComposerTests(unittest.TestCase):
         self.assertIn("시행일자를 특정하지 못했습니다.", result)
         self.assertIn("확정적으로 단정하기보다", result)
 
-    def test_compose_difference_question_adds_comparison_guidance(self):
+    def test_compose_difference_question_adds_related_articles(self):
         result = self.composer.compose(
             AnswerCompositionInput(
-                user_query="개인정보 보호법 제1조 차이 설명",
+                user_query="개인정보 보호법 제1조와 제2조 차이 설명",
                 prompt_payload={"system": "x", "user": "y"},
                 law_enrichment={
                     "primary_law": {"law_name": "개인정보 보호법"},
@@ -116,38 +123,55 @@ class AnswerComposerTests(unittest.TestCase):
                     "article": {
                         "found": True,
                         "article_no": "제1조",
-                        "article_text": "제1조(목적) 이 법은 개인정보의 처리 및 보호에 관한 사항을 정한다.",
+                        "article_text": "제1조(목적) 이 법의 목적을 정한다.",
                     },
+                    "related_articles": [
+                        {
+                            "found": True,
+                            "article_no": "제2조",
+                            "article_text": "제2조(정의) 이 법에서 사용하는 용어의 뜻은 다음과 같다.",
+                        }
+                    ],
                 },
                 risk_level="LOW",
                 fallback_answer="",
             )
         )
 
-        self.assertIn("비교 질문의 기준점", result)
+        self.assertIn("다른 조문과 비교할 때 기준점이 되는 조문", result)
+        self.assertIn("[비교 참고 조문]", result)
+        self.assertIn("제2조(정의)", result)
         self.assertIn("비교 대상 조문", result)
 
-    def test_compose_illegality_question_adds_cautious_guidance(self):
+    def test_compose_procedure_question_adds_related_articles(self):
         result = self.composer.compose(
             AnswerCompositionInput(
-                user_query="개인정보 보호법 제75조가 위법 여부 판단 기준인지 알려줘",
+                user_query="개인정보 보호법 제34조와 제34조의2 절차를 설명해줘",
                 prompt_payload={"system": "x", "user": "y"},
                 law_enrichment={
                     "primary_law": {"law_name": "개인정보 보호법"},
                     "version": {"version_fields": {}},
                     "article": {
                         "found": True,
-                        "article_no": "제75조",
-                        "article_text": "제75조(벌칙) 다음 각 호의 어느 하나에 해당하는 자는 처벌한다.",
+                        "article_no": "제34조",
+                        "article_text": "제34조(개인정보 유출 통지) 개인정보 유출 시 정보주체에게 통지해야 한다.",
                     },
+                    "related_articles": [
+                        {
+                            "found": True,
+                            "article_no": "제34조의2",
+                            "article_text": "제34조의2(유출 신고) 개인정보 유출 시 감독기관에 신고해야 한다.",
+                        }
+                    ],
                 },
-                risk_level="HIGH",
+                risk_level="LOW",
                 fallback_answer="",
             )
         )
 
-        self.assertIn("위법 여부를 판단할 때 참고", result)
-        self.assertIn("조문 문구만으로 단정하기 어렵고", result)
+        self.assertIn("절차나 처리 순서를 이해할 때 먼저 확인할 조문", result)
+        self.assertIn("[연관 조문]", result)
+        self.assertIn("단계별로 다시 정리", result)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from src.request_pipeline import PipelineRequest, RequestPipeline
 class FakeLawApiOk:
     def __init__(self):
         self.search_queries = []
+        self.article_calls = []
 
     def search_law(self, query):
         self.search_queries.append(query)
@@ -32,11 +33,20 @@ class FakeLawApiOk:
         }
 
     def get_article(self, law_id, article_no):
+        self.article_calls.append((law_id, article_no))
+        titles = {
+            "제1조": "목적",
+            "제2조": "정의",
+            "제34조": "개인정보 유출 통지",
+            "제34조의2": "유출 신고",
+        }
+        title = titles.get(article_no, "일반")
         return {
             "law_id": law_id,
             "article_no": article_no,
             "found": True,
-            "article_text": f"{article_no}(목적) 테스트 조문 본문",
+            "matched_via": "service:law",
+            "article_text": f"{article_no}({title}) 테스트 조문 본문",
         }
 
 
@@ -54,7 +64,7 @@ class FakeLawApiNeedsNormalizedQuery(FakeLawApiEmpty):
         return {"law_id": law_id, "version_fields": {"시행일자": "20251002"}}
 
     def get_article(self, law_id, article_no):
-        return {"law_id": law_id, "article_no": article_no, "found": True, "article_text": "제1조 본문"}
+        return {"law_id": law_id, "article_no": article_no, "found": True, "article_text": f"{article_no}(목적) 본문"}
 
     def search_law(self, query):
         self.search_queries.append(query)
@@ -81,7 +91,8 @@ class RequestPipelineTests(unittest.TestCase):
 
             result = pipeline.process(
                 PipelineRequest(
-                    user_query="개인정보 처리 위법 여부와 조사 대응", context="기준시점: 2025-01-01"
+                    user_query="개인정보 처리 위법 여부 조사 대상인지 설명",
+                    context="기준시점: 2025-01-01",
                 )
             )
 
@@ -113,7 +124,7 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertIn("law_context", result.citations)
             self.assertEqual(result.citations["law_context"]["article"]["article_no"], "제1조")
             self.assertIn("개인정보 보호법 제1조는 목적에 관한 규정입니다.", result.answer)
-            self.assertIn("현재 확인된 조문은 다음과 같습니다.", result.answer)
+            self.assertIn("현재 확인한 조문은 다음과 같습니다.", result.answer)
             self.assertIn("쉽게 말하면", result.answer)
 
     def test_process_uses_normalized_law_search_query(self):
@@ -134,6 +145,44 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertEqual(result.citations["law_context"]["used_search_query"], "개인정보 보호법")
             self.assertIn("개인정보 보호법", result.citations["law_context"]["search_queries"])
             self.assertEqual(result.citations["law_search"]["used_search_query"], "개인정보 보호법")
+
+    def test_process_fetches_related_articles_for_difference_question(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = CostLogger(db_path=str(Path(tmp) / "cost_logs.db"))
+            law_api = FakeLawApiOk()
+            pipeline = RequestPipeline(law_api=law_api, logger=logger)
+
+            result = pipeline.process(
+                PipelineRequest(
+                    user_query="개인정보 보호법 제1조와 제2조 차이를 설명해줘",
+                    context="기준시점: 2025-01-01",
+                )
+            )
+
+            self.assertIsNone(result.error)
+            self.assertEqual(law_api.article_calls, [("011357", "제1조"), ("011357", "제2조")])
+            self.assertEqual(result.citations["law_context"]["related_articles"][0]["article_no"], "제2조")
+            self.assertIn("[비교 참고 조문]", result.answer)
+
+    def test_process_fetches_related_articles_for_procedure_question(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = CostLogger(db_path=str(Path(tmp) / "cost_logs.db"))
+            law_api = FakeLawApiOk()
+            pipeline = RequestPipeline(law_api=law_api, logger=logger)
+
+            result = pipeline.process(
+                PipelineRequest(
+                    user_query="개인정보 보호법 제34조와 제34조의2 절차를 설명해줘",
+                    context="기준시점: 2025-01-01",
+                )
+            )
+
+            self.assertIsNone(result.error)
+            self.assertEqual(
+                law_api.article_calls,
+                [("011357", "제34조"), ("011357", "제34조의2")],
+            )
+            self.assertIn("[연관 조문]", result.answer)
 
     def test_process_error_path_logs(self):
         with tempfile.TemporaryDirectory() as tmp:
