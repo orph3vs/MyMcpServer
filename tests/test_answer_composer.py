@@ -70,6 +70,41 @@ class AnswerComposerTests(unittest.TestCase):
         self.assertIn("현재 확인된 시행일자는 20251002입니다.", result)
         self.assertIn("사실관계와 관련 조문", result)
 
+    def test_compose_article_answer_for_scope_article(self):
+        result = self.composer.compose(
+            AnswerCompositionInput(
+                user_query="적용범위 조항 설명",
+                prompt_payload={"system": "x", "user": "y"},
+                law_enrichment={
+                    "primary_law": {"law_name": "가상 법률"},
+                    "version": {"version_fields": {}},
+                    "article": {
+                        "found": True,
+                        "article_no": "제3조",
+                        "article_text": "제3조(적용범위) 이 법은 공공기관과 사업자에 적용한다.",
+                    },
+                },
+                risk_level="LOW",
+                fallback_answer="",
+            )
+        )
+
+        self.assertIn("적용 범위를 분명하게 하는 조문", result)
+
+    def test_compose_high_risk_fallback_without_version_is_cautious(self):
+        result = self.composer.compose(
+            AnswerCompositionInput(
+                user_query="위법 여부 판단",
+                prompt_payload={"system": "x", "user": "y"},
+                law_enrichment={"primary_law": {"law_name": "가상 법률"}},
+                risk_level="HIGH",
+                fallback_answer="",
+            )
+        )
+
+        self.assertIn("시행일자를 특정하지 못했습니다.", result)
+        self.assertIn("확정적으로 단정하기보다", result)
+
 
 if __name__ == "__main__":
     unittest.main()

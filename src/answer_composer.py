@@ -19,6 +19,15 @@ class AnswerCompositionInput:
 class AnswerComposer:
     """Compose user-facing legal answers from grounded law enrichment data."""
 
+    _ARTICLE_CATEGORY_KEYWORDS = {
+        "purpose": ("목적",),
+        "definition": ("정의",),
+        "scope": ("적용범위", "적용 대상", "적용례"),
+        "duty": ("책무", "의무"),
+        "prohibition": ("금지행위", "금지", "제한"),
+        "sanction": ("벌칙", "과태료", "과징금"),
+    }
+
     @staticmethod
     def _clean_text(text: str) -> str:
         return re.sub(r"\s+", " ", text or "").strip()
@@ -39,17 +48,33 @@ class AnswerComposer:
 
     @staticmethod
     def _build_plain_explanation(article_title: Optional[str], law_name: str, article_no: str) -> str:
-        if article_title == "목적":
+        category = AnswerComposer._article_category(article_title)
+        if category == "purpose":
             return (
                 f"쉽게 말하면, 이 조항은 {law_name}이 왜 존재하는지 밝히는 규정으로 "
                 "개인의 권리와 보호 가치가 이 법의 출발점이라는 뜻입니다."
             )
-        if article_title == "정의":
+        if category == "definition":
             return (
                 f"쉽게 말하면, 이 조항은 {law_name}에서 쓰는 핵심 용어의 뜻을 정해 "
                 "뒤에 나오는 규정들을 해석하는 기준을 세우는 역할을 합니다."
             )
-        if article_title and any(keyword in article_title for keyword in ("벌칙", "과태료", "과징금")):
+        if category == "scope":
+            return (
+                f"쉽게 말하면, {article_no}는 {law_name}이 누구에게, 어떤 경우에 적용되는지 정해 "
+                "법의 적용 범위를 분명하게 하는 조문입니다."
+            )
+        if category == "duty":
+            return (
+                f"쉽게 말하면, {article_no}는 {law_name}상 관련 주체가 무엇을 해야 하는지 정한 조문으로 "
+                "준수해야 할 기본 책임을 보여줍니다."
+            )
+        if category == "prohibition":
+            return (
+                f"쉽게 말하면, {article_no}는 {law_name}상 해서는 안 되는 행위나 제한되는 행위를 정한 조문으로 "
+                "허용 범위의 바깥선을 그어주는 역할을 합니다."
+            )
+        if category == "sanction":
             return (
                 f"쉽게 말하면, {article_no}는 {law_name} 위반 시 책임이나 제재 기준을 정한 조문이라 "
                 "실제 사실관계와 적용 요건을 함께 따져봐야 합니다."
@@ -62,9 +87,19 @@ class AnswerComposer:
     def _build_risk_notice(risk_level: str, article_title: Optional[str]) -> Optional[str]:
         if risk_level != "HIGH":
             return None
-        if article_title and any(keyword in article_title for keyword in ("벌칙", "과태료", "과징금")):
+        if AnswerComposer._article_category(article_title) == "sanction":
             return "이 조항은 제재와 직접 연결될 수 있어, 실제 적용 여부는 사실관계와 요건 충족 여부를 개별적으로 검토하는 것이 안전합니다."
         return "이 질문은 해석상 주의가 필요한 편이라, 실제 적용 시에는 관련 조문과 사실관계를 추가로 확인하는 것이 안전합니다."
+
+    @classmethod
+    def _article_category(cls, article_title: Optional[str]) -> Optional[str]:
+        if not article_title:
+            return None
+        normalized = cls._clean_text(article_title)
+        for category, keywords in cls._ARTICLE_CATEGORY_KEYWORDS.items():
+            if any(keyword in normalized for keyword in keywords):
+                return category
+        return None
 
     def compose(self, composition_input: AnswerCompositionInput) -> str:
         law_enrichment = composition_input.law_enrichment
@@ -101,9 +136,11 @@ class AnswerComposer:
             lines = [f"질문과 가장 관련된 법령은 {law_name}입니다."]
             if version_fields.get("시행일자"):
                 lines.append(f"현재 확인된 시행일자는 {version_fields['시행일자']}입니다.")
+            else:
+                lines.append("현재 확보한 정보만으로는 시행일자를 특정하지 못했습니다.")
             lines.append("다만 현재 질문에 대응하는 조문 본문까지는 확인되지 않아, 법령명과 버전 정보를 기준으로 먼저 안내드립니다.")
             if composition_input.risk_level == "HIGH":
-                lines.append("질문에 위법성, 조사 대응, 제재 여부 같은 요소가 포함되어 있어 실제 판단에는 구체적 사실관계와 관련 조문을 함께 확인하는 것이 안전합니다.")
+                lines.append("질문에 위법성, 조사 대응, 제재 여부 같은 요소가 포함되어 있어 현재 정보만으로 확정적으로 단정하기보다, 구체적 사실관계와 관련 조문을 함께 확인하는 것이 안전합니다.")
             else:
                 lines.append("필요하시면 관련 조문이나 정의 조항을 추가로 특정해서 더 구체적으로 설명드릴 수 있습니다.")
             return "\n".join(lines).strip()
