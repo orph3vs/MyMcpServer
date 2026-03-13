@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 
 @dataclass(frozen=True)
@@ -31,8 +32,21 @@ class CostLogger:
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(str(self.db_path))
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        """Provide a connection that is always closed.
+
+        Note: sqlite3 connection context manager commits/rolls back transactions,
+        but does not guarantee connection close on all runtimes.
+        """
+        conn = self._connect()
+        try:
+            yield conn
+        finally:
+            conn.close()
+
     def _init_db(self) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS request_cost_logs (
@@ -52,7 +66,7 @@ class CostLogger:
             conn.commit()
 
     def log_request(self, entry: CostLogEntry) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO request_cost_logs (
@@ -76,7 +90,7 @@ class CostLogger:
         if limit <= 0:
             raise ValueError("limit must be positive")
 
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT request_id, risk_level, mode, tokens_in, tokens_out, cost, latency, score
@@ -102,7 +116,7 @@ class CostLogger:
         ]
 
     def get_by_request_id(self, request_id: str) -> Optional[CostLogEntry]:
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 """
                 SELECT request_id, risk_level, mode, tokens_in, tokens_out, cost, latency, score
