@@ -7,7 +7,11 @@ from src.request_pipeline import PipelineRequest, RequestPipeline
 
 
 class FakeLawApiOk:
+    def __init__(self):
+        self.search_queries = []
+
     def search_law(self, query):
+        self.search_queries.append(query)
         return {
             "LawSearch": {
                 "law": [
@@ -37,8 +41,36 @@ class FakeLawApiOk:
 
 
 class FakeLawApiEmpty:
+    def __init__(self):
+        self.search_queries = []
+
     def search_law(self, query):
+        self.search_queries.append(query)
         return {}
+
+
+class FakeLawApiNeedsNormalizedQuery(FakeLawApiEmpty):
+    def get_version(self, law_id):
+        return {"law_id": law_id, "version_fields": {"시행일자": "20251002"}}
+
+    def get_article(self, law_id, article_no):
+        return {"law_id": law_id, "article_no": article_no, "found": True, "article_text": "제1조 본문"}
+
+    def search_law(self, query):
+        self.search_queries.append(query)
+        if query == "개인정보 보호법":
+            return {
+                "LawSearch": {
+                    "law": [
+                        {
+                            "법령ID": "011357",
+                            "법령명한글": "개인정보 보호법",
+                            "법령일련번호": "270351",
+                        }
+                    ]
+                }
+            }
+        return {"LawSearch": {"law": [], "totalCnt": "0"}}
 
 
 class RequestPipelineTests(unittest.TestCase):
@@ -81,6 +113,24 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertEqual(result.citations["law_enrichment"]["article"]["article_no"], "제1조")
             self.assertIn("대표 법령: 개인정보 보호법", result.answer)
             self.assertIn("조문 본문:", result.answer)
+
+    def test_process_uses_normalized_law_search_query(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = CostLogger(db_path=str(Path(tmp) / "cost_logs.db"))
+            law_api = FakeLawApiNeedsNormalizedQuery()
+            pipeline = RequestPipeline(law_api=law_api, logger=logger)
+
+            result = pipeline.process(
+                PipelineRequest(
+                    user_query="개인정보 보호법 제1조 설명",
+                    context="기준시점: 2025-01-01",
+                )
+            )
+
+            self.assertIsNone(result.error)
+            self.assertEqual(law_api.search_queries[0], "개인정보 보호법")
+            self.assertEqual(result.citations["law_enrichment"]["used_search_query"], "개인정보 보호법")
+            self.assertIn("개인정보 보호법", result.citations["law_enrichment"]["search_queries"])
 
     def test_process_error_path_logs(self):
         with tempfile.TemporaryDirectory() as tmp:

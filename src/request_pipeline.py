@@ -140,6 +140,37 @@ class RequestPipeline:
             return f"[LAW_CONTEXT]\n{extra}"
         return base_context
 
+    @staticmethod
+    def _law_search_queries(user_query: str) -> List[str]:
+        normalized = re.sub(r"\s+", " ", user_query).strip()
+        if not normalized:
+            return []
+
+        queries: List[str] = []
+
+        law_name_match = re.search(
+            r"([가-힣A-Za-z0-9 ]+?(?:법 시행규칙|법 시행령|법|시행령|시행규칙))",
+            normalized,
+        )
+        if law_name_match:
+            queries.append(re.sub(r"\s+", " ", law_name_match.group(1)).strip())
+
+        simplified = re.sub(r"제\s*\d+\s*조(?:\s*의\s*\d+)?", "", normalized)
+        simplified = re.sub(r"\b(설명|해설|알려줘|알려 주세요|알려줘요|보여줘|요약|의미|뭐야|무엇인가)\b", "", simplified)
+        simplified = re.sub(r"\s+", " ", simplified).strip(" ,")
+        if simplified:
+            queries.append(simplified)
+
+        queries.append(normalized)
+
+        deduped: List[str] = []
+        seen = set()
+        for query in queries:
+            if query and query not in seen:
+                seen.add(query)
+                deduped.append(query)
+        return deduped
+
     def _build_law_enrichment(self, user_query: str, law_data: Dict[str, Any]) -> Dict[str, Any]:
         primary_law = self._pick_primary_law(law_data)
         enrichment: Dict[str, Any] = {
@@ -220,10 +251,20 @@ class RequestPipeline:
                 raise PipelineStageError("PromptBuilder", "invalid_prompt_payload")
 
             # 3) LawAPI
-            law_data = self.law_api.search_law(req.user_query)
+            search_queries = self._law_search_queries(req.user_query)
+            law_data: Dict[str, Any] = {}
+            used_search_query: Optional[str] = None
+            for search_query in search_queries:
+                law_data = self.law_api.search_law(search_query)
+                if law_data and self._extract_law_items(law_data):
+                    used_search_query = search_query
+                    break
+
             if not law_data or not self._extract_law_items(law_data):
                 raise PipelineStageError("LawAPI", "empty_law_data")
             law_enrichment = self._build_law_enrichment(req.user_query, law_data)
+            law_enrichment["search_queries"] = search_queries
+            law_enrichment["used_search_query"] = used_search_query
             enriched_context = self._merge_context(req.context, self._law_context_lines(law_enrichment))
 
             # 4) AgentEngine
