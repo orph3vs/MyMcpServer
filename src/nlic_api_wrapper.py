@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
@@ -118,6 +119,15 @@ class NlicApiWrapper:
         return None
 
     @staticmethod
+    def _normalize_article_no(article_no: str) -> str:
+        compact = re.sub(r"\s+", "", article_no)
+        return compact
+
+    @staticmethod
+    def _contains_article_no(text: str, article_no: str) -> bool:
+        return NlicApiWrapper._normalize_article_no(article_no) in NlicApiWrapper._normalize_article_no(text)
+
+    @staticmethod
     def _extract_mst(source: Dict[str, Any]) -> Optional[str]:
         return NlicApiWrapper._extract_from_nested(source, ("법령일련번호", "MST", "mst"))
 
@@ -126,18 +136,42 @@ class NlicApiWrapper:
             raise ValueError("query must not be empty")
         return self._call("law", {"query": query.strip()})
 
-    def _extract_article_text(self, source: Dict[str, Any]) -> Optional[str]:
-        return self._extract_from_nested(
-            source,
-            (
-                "조문내용",
-                "조문",
-                "조문제목",
-                "조문단위",
-                "content",
-                "article",
-            ),
-        )
+    def _extract_article_text(self, source: Any, article_no: str) -> Optional[str]:
+        article_keys = ("조문내용", "조문", "내용", "본문", "조문단위")
+        article_ref_keys = ("조문번호", "조번호", "조문제목", "조문키")
+
+        def _walk(node: Any) -> Optional[str]:
+            if isinstance(node, dict):
+                # First: strict match by article_no near article-like fields.
+                ref_text = " ".join(
+                    str(node.get(k, "")) for k in article_ref_keys if isinstance(node.get(k), (str, int))
+                )
+                for key in article_keys:
+                    value = node.get(key)
+                    if isinstance(value, str) and value.strip():
+                        if self._contains_article_no(value, article_no) or (
+                            ref_text and self._contains_article_no(ref_text, article_no)
+                        ):
+                            return value.strip()
+                # Recurse.
+                for value in node.values():
+                    hit = _walk(value)
+                    if hit:
+                        return hit
+            elif isinstance(node, list):
+                for item in node:
+                    hit = _walk(item)
+                    if hit:
+                        return hit
+            return None
+
+        # Pass 1: strict by article_no
+        hit = _walk(source)
+        if hit:
+            return hit
+
+        # Pass 2: conservative fallback only for explicit 조문내용 key.
+        return self._extract_from_nested(source, ("조문내용",))
 
     def get_article(self, law_id: str, article_no: str) -> Dict[str, Any]:
         if not law_id.strip() or not article_no.strip():
@@ -146,42 +180,57 @@ class NlicApiWrapper:
         normalized_law_id = law_id.strip()
         normalized_article_no = article_no.strip()
 
-        # 1) quick path via search endpoint
-        source = self._call("law", {"ID": normalized_law_id, "JO": normalized_article_no})
-        article_text = self._extract_article_text(source)
+        attempts = [
+            ("search", "law", {"ID": normalized_law_id, "JO": normalized_article_no}),
+            ("service", "law", {"ID": normalized_law_id, "JO": normalized_article_no}),
+            ("service", "jo", {"ID": normalized_law_id, "JO": normalized_article_no}),
+        ]
 
-        # 2) fallback via lawService endpoint with ID/JO
-        if not article_text:
-            service_source = self._call(
-                "law",
-                {"ID": normalized_law_id, "JO": normalized_article_no},
-                endpoint="service",
-            )
-            service_text = self._extract_article_text(service_source)
-            if service_text:
-                source = service_source
-                article_text = service_text
+        source: Dict[str, Any] = {}
+        article_text: Optional[str] = None
+        matched_via: Optional[str] = None
+        attempted_queries = []
 
-        # 3) fallback via MST/JO when caller provided 법령ID
+        for endpoint, target, params in attempts:
+            attempted_queries.append({"endpoint": endpoint, "target": target, "params": dict(params)})
+            source = self._call(target, params, endpoint=endpoint)
+            article_text = self._extract_article_text(source, normalized_article_no)
+            if article_text:
+                matched_via = f"{endpoint}:{target}"
+                break
+
+        # fallback via MST/JO when caller provided 법령ID
         if not article_text:
             search_source = self._call("law", {"ID": normalized_law_id})
             mst = self._extract_mst(search_source)
             if mst:
-                mst_source = self._call(
-                    "law",
-                    {"MST": mst, "JO": normalized_article_no},
-                    endpoint="service",
-                )
-                mst_text = self._extract_article_text(mst_source)
-                if mst_text:
-                    source = mst_source
-                    article_text = mst_text
+                for target in ("law", "jo"):
+                    attempted_queries.append(
+                        {
+                            "endpoint": "service",
+                            "target": target,
+                            "params": {"MST": mst, "JO": normalized_article_no},
+                        }
+                    )
+                    mst_source = self._call(
+                        target,
+                        {"MST": mst, "JO": normalized_article_no},
+                        endpoint="service",
+                    )
+                    mst_text = self._extract_article_text(mst_source, normalized_article_no)
+                    if mst_text:
+                        source = mst_source
+                        article_text = mst_text
+                        matched_via = f"service:{target}:mst"
+                        break
 
         return {
             "law_id": normalized_law_id,
             "article_no": normalized_article_no,
             "found": bool(article_text),
             "article_text": article_text,
+            "matched_via": matched_via,
+            "attempted_queries": attempted_queries,
             "source": source,
         }
 

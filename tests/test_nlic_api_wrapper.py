@@ -11,15 +11,11 @@ class FakeNlicApiWrapper(NlicApiWrapper):
     def _request(self, params, endpoint_url=None):
         self.calls.append({"params": params, "endpoint_url": endpoint_url})
         target = params.get("target")
+
         if target == "law" and params.get("query"):
             return {"law": [{"id": "L1", "name": params["query"]}]}
-        if endpoint_url == self.service_url and target == "law" and params.get("MST") and params.get("JO"):
-            return {"조문내용": f"MST-{params['MST']}:{params['JO']}"}
-        if endpoint_url == self.service_url and target == "law" and params.get("ID") and params.get("JO"):
-            return {"raw": "   "}
-        if target == "law" and params.get("ID") and params.get("JO"):
-            return {"raw": "   "}
-        if target == "law" and params.get("ID"):
+
+        if target == "law" and params.get("ID") and not params.get("JO"):
             return {
                 "LawSearch": {
                     "law": {
@@ -30,8 +26,34 @@ class FakeNlicApiWrapper(NlicApiWrapper):
                     }
                 }
             }
+
+        if endpoint_url == self.service_url and params.get("MST") and params.get("JO") and target in ("law", "jo"):
+            if params.get("JO") == "제1조":
+                return {
+                    "조문": {
+                        "조문단위": [
+                            {
+                                "조문번호": "제1조",
+                                "조문내용": "제1조(목적) 이 법은 개인정보의 처리 및 보호에 관한 사항을 정한다.",
+                            }
+                        ]
+                    }
+                }
+            return {"raw": "   "}
+
+        # noisy summary-like payload (contains unrelated `content`)
+        if params.get("ID") and params.get("JO"):
+            return {
+                "법령": {
+                    "기본정보": {
+                        "소관부처": {"content": "개인정보보호위원회"}
+                    }
+                }
+            }
+
         if target == "history":
             return {"versions": [{"id": params.get("ID"), "ver": "2025-01-01"}]}
+
         return {}
 
 
@@ -59,8 +81,16 @@ class NlicApiWrapperTests(unittest.TestCase):
         self.assertEqual(article["law_id"], "L1")
         self.assertEqual(article["article_no"], "제1조")
         self.assertTrue(article["found"])
-        self.assertEqual(article["article_text"], "MST-270351:제1조")
+        self.assertIn("제1조(목적)", article["article_text"])
+        self.assertTrue(article["matched_via"])
+        self.assertGreater(len(article["attempted_queries"]), 0)
         self.assertTrue(validated["is_valid"])
+
+    def test_get_article_does_not_pick_unrelated_content_field(self):
+        api = FakeNlicApiWrapper()
+        article = api.get_article("L1", "제999조")
+        self.assertFalse(article["found"])
+        self.assertIsNone(article["article_text"])
 
     def test_get_version(self):
         api = FakeNlicApiWrapper()
