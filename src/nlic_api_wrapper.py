@@ -1,0 +1,230 @@
+"""국가법령정보센터(NLIC) API wrapper with in-memory cache.
+
+Implemented features:
+- search_law
+- get_article
+- get_version
+- validate_article
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlencode
+from urllib.request import urlopen
+
+
+@dataclass(frozen=True)
+class CacheEntry:
+    value: Dict[str, Any]
+    expires_at: float
+
+
+class NlicApiWrapper:
+    """Thin API wrapper for NLIC endpoints with TTL cache support."""
+
+    DEFAULT_BASE_URL = "https://www.law.go.kr/DRF/lawSearch.do"
+    DEFAULT_SERVICE_URL = "https://www.law.go.kr/DRF/lawService.do"
+
+    def __init__(
+        self,
+        oc: Optional[str] = "orph3vs_mcpserver",
+        base_url: str = DEFAULT_BASE_URL,
+        service_url: str = DEFAULT_SERVICE_URL,
+        cache_ttl_seconds: int = 300,
+    ) -> None:
+        oc_value = oc or os.getenv("NLIC_OC")
+        if not oc_value:
+            raise ValueError("oc is required")
+        if cache_ttl_seconds <= 0:
+            raise ValueError("cache_ttl_seconds must be positive")
+
+        self.oc = oc_value
+        self.base_url = base_url
+        self.service_url = service_url
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self._cache: Dict[Tuple[str, Tuple[Tuple[str, str], ...]], CacheEntry] = {}
+
+    def _cache_key(self, action: str, params: Dict[str, Any]) -> Tuple[str, Tuple[Tuple[str, str], ...]]:
+        normalized = tuple(sorted((k, str(v)) for k, v in params.items()))
+        return action, normalized
+
+    def _get_cached(self, key: Tuple[str, Tuple[Tuple[str, str], ...]]) -> Optional[Dict[str, Any]]:
+        entry = self._cache.get(key)
+        if not entry:
+            return None
+        if time.time() > entry.expires_at:
+            self._cache.pop(key, None)
+            return None
+        return entry.value
+
+    def _set_cached(self, key: Tuple[str, Tuple[Tuple[str, str], ...]], value: Dict[str, Any]) -> None:
+        self._cache[key] = CacheEntry(
+            value=value,
+            expires_at=time.time() + self.cache_ttl_seconds,
+        )
+
+    def _request(self, params: Dict[str, Any], endpoint_url: Optional[str] = None) -> Dict[str, Any]:
+        query = urlencode(params)
+        url = f"{endpoint_url or self.base_url}?{query}"
+        with urlopen(url, timeout=15) as response:  # nosec B310
+            payload = response.read().decode("utf-8")
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError:
+            # NLIC may return XML/text depending on API options.
+            return {"raw": payload}
+
+    def _call(self, action: str, extra_params: Dict[str, Any], endpoint: str = "search") -> Dict[str, Any]:
+        params = {"OC": self.oc, "target": action, "type": "JSON"}
+        params.update(extra_params)
+
+        endpoint_url = self.service_url if endpoint == "service" else self.base_url
+        cache_action = f"{endpoint}:{action}"
+        key = self._cache_key(action=cache_action, params=params)
+        cached = self._get_cached(key)
+        if cached is not None:
+            return cached
+
+        result = self._request(params, endpoint_url=endpoint_url)
+        self._set_cached(key, result)
+        return result
+
+    @staticmethod
+    def _is_blank_raw(result: Dict[str, Any]) -> bool:
+        raw = result.get("raw")
+        return isinstance(raw, str) and not raw.strip()
+
+    @staticmethod
+    def _extract_from_nested(obj: Any, key_candidates: Tuple[str, ...]) -> Optional[str]:
+        if isinstance(obj, dict):
+            for key in key_candidates:
+                value = obj.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            for value in obj.values():
+                hit = NlicApiWrapper._extract_from_nested(value, key_candidates)
+                if hit:
+                    return hit
+        elif isinstance(obj, list):
+            for item in obj:
+                hit = NlicApiWrapper._extract_from_nested(item, key_candidates)
+                if hit:
+                    return hit
+        return None
+
+    @staticmethod
+    def _extract_mst(source: Dict[str, Any]) -> Optional[str]:
+        return NlicApiWrapper._extract_from_nested(source, ("법령일련번호", "MST", "mst"))
+
+    def search_law(self, query: str) -> Dict[str, Any]:
+        if not query.strip():
+            raise ValueError("query must not be empty")
+        return self._call("law", {"query": query.strip()})
+
+    def _extract_article_text(self, source: Dict[str, Any]) -> Optional[str]:
+        return self._extract_from_nested(
+            source,
+            (
+                "조문내용",
+                "조문",
+                "조문제목",
+                "조문단위",
+                "content",
+                "article",
+            ),
+        )
+
+    def get_article(self, law_id: str, article_no: str) -> Dict[str, Any]:
+        if not law_id.strip() or not article_no.strip():
+            raise ValueError("law_id and article_no are required")
+
+        normalized_law_id = law_id.strip()
+        normalized_article_no = article_no.strip()
+
+        # 1) quick path via search endpoint
+        source = self._call("law", {"ID": normalized_law_id, "JO": normalized_article_no})
+        article_text = self._extract_article_text(source)
+
+        # 2) fallback via lawService endpoint with ID/JO
+        if not article_text:
+            service_source = self._call(
+                "law",
+                {"ID": normalized_law_id, "JO": normalized_article_no},
+                endpoint="service",
+            )
+            service_text = self._extract_article_text(service_source)
+            if service_text:
+                source = service_source
+                article_text = service_text
+
+        # 3) fallback via MST/JO when caller provided 법령ID
+        if not article_text:
+            search_source = self._call("law", {"ID": normalized_law_id})
+            mst = self._extract_mst(search_source)
+            if mst:
+                mst_source = self._call(
+                    "law",
+                    {"MST": mst, "JO": normalized_article_no},
+                    endpoint="service",
+                )
+                mst_text = self._extract_article_text(mst_source)
+                if mst_text:
+                    source = mst_source
+                    article_text = mst_text
+
+        return {
+            "law_id": normalized_law_id,
+            "article_no": normalized_article_no,
+            "found": bool(article_text),
+            "article_text": article_text,
+            "source": source,
+        }
+
+    def get_version(self, law_id: str) -> Dict[str, Any]:
+        if not law_id.strip():
+            raise ValueError("law_id is required")
+
+        normalized_law_id = law_id.strip()
+        history_result = self._call("history", {"ID": normalized_law_id})
+
+        # Some environments return blank raw for target=history.
+        if history_result and not self._is_blank_raw(history_result):
+            return {
+                "law_id": normalized_law_id,
+                "source_target": "history",
+                "data": history_result,
+            }
+
+        # Fallback: derive version metadata from law target.
+        law_result = self._call("law", {"ID": normalized_law_id})
+        version_fields = {}
+        for key in ("시행일자", "공포일자", "제개정구분", "제개정구분명", "개정문"):
+            value = self._extract_from_nested(law_result, (key,))
+            if value:
+                version_fields[key] = value
+
+        return {
+            "law_id": normalized_law_id,
+            "source_target": "law_fallback",
+            "version_fields": version_fields,
+            "data": law_result,
+        }
+
+    def validate_article(self, law_id: str, article_no: str) -> Dict[str, Any]:
+        """Validate article existence using get_article result."""
+        article_result = self.get_article(law_id=law_id, article_no=article_no)
+
+        return {
+            "law_id": law_id,
+            "article_no": article_no,
+            "is_valid": bool(article_result.get("found")),
+            "source": article_result,
+        }
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
