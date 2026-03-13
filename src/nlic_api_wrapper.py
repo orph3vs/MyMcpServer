@@ -123,6 +123,30 @@ class NlicApiWrapper:
         compact = re.sub(r"\s+", "", article_no)
         return compact
 
+    @classmethod
+    def _article_no_candidates(cls, article_no: str) -> Tuple[str, ...]:
+        compact = cls._normalize_article_no(article_no)
+        candidates = []
+
+        if compact:
+            candidates.append(compact)
+
+        match = re.fullmatch(r"(?:제)?(\d+)조(?:의(\d+))?", compact)
+        if match:
+            main_no = int(match.group(1))
+            sub_no = match.group(2)
+            if sub_no is not None:
+                candidates.append(f"{main_no:04d}{int(sub_no):02d}")
+            candidates.append(f"{main_no:04d}00")
+
+        deduped = []
+        seen = set()
+        for candidate in candidates:
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                deduped.append(candidate)
+        return tuple(deduped)
+
     @staticmethod
     def _contains_article_no(text: str, article_no: str) -> bool:
         return NlicApiWrapper._normalize_article_no(article_no) in NlicApiWrapper._normalize_article_no(text)
@@ -179,12 +203,20 @@ class NlicApiWrapper:
 
         normalized_law_id = law_id.strip()
         normalized_article_no = article_no.strip()
+        article_candidates = self._article_no_candidates(normalized_article_no)
 
-        attempts = [
-            ("search", "law", {"ID": normalized_law_id, "JO": normalized_article_no}),
-            ("service", "law", {"ID": normalized_law_id, "JO": normalized_article_no}),
-            ("service", "jo", {"ID": normalized_law_id, "JO": normalized_article_no}),
-        ]
+        attempts = []
+        for jo_value in article_candidates:
+            attempts.append(("service", "law", {"ID": normalized_law_id, "JO": jo_value}))
+            attempts.append(("service", "lawjosub", {"ID": normalized_law_id, "JO": jo_value}))
+
+        if not normalized_article_no.isdigit():
+            attempts.extend(
+                [
+                    ("search", "law", {"ID": normalized_law_id, "JO": normalized_article_no}),
+                    ("service", "jo", {"ID": normalized_law_id, "JO": normalized_article_no}),
+                ]
+            )
 
         source: Dict[str, Any] = {}
         article_text: Optional[str] = None
@@ -204,29 +236,33 @@ class NlicApiWrapper:
             search_source = self._call("law", {"ID": normalized_law_id})
             mst = self._extract_mst(search_source)
             if mst:
-                for target in ("law", "jo"):
-                    attempted_queries.append(
-                        {
-                            "endpoint": "service",
-                            "target": target,
-                            "params": {"MST": mst, "JO": normalized_article_no},
-                        }
-                    )
-                    mst_source = self._call(
-                        target,
-                        {"MST": mst, "JO": normalized_article_no},
-                        endpoint="service",
-                    )
-                    mst_text = self._extract_article_text(mst_source, normalized_article_no)
-                    if mst_text:
-                        source = mst_source
-                        article_text = mst_text
-                        matched_via = f"service:{target}:mst"
+                for jo_value in article_candidates:
+                    for target in ("law", "lawjosub"):
+                        attempted_queries.append(
+                            {
+                                "endpoint": "service",
+                                "target": target,
+                                "params": {"MST": mst, "JO": jo_value},
+                            }
+                        )
+                        mst_source = self._call(
+                            target,
+                            {"MST": mst, "JO": jo_value},
+                            endpoint="service",
+                        )
+                        mst_text = self._extract_article_text(mst_source, normalized_article_no)
+                        if mst_text:
+                            source = mst_source
+                            article_text = mst_text
+                            matched_via = f"service:{target}:mst"
+                            break
+                    if article_text:
                         break
 
         return {
             "law_id": normalized_law_id,
             "article_no": normalized_article_no,
+            "article_candidates": list(article_candidates),
             "found": bool(article_text),
             "article_text": article_text,
             "matched_via": matched_via,

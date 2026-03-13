@@ -27,8 +27,8 @@ class FakeNlicApiWrapper(NlicApiWrapper):
                 }
             }
 
-        if endpoint_url == self.service_url and params.get("MST") and params.get("JO") and target in ("law", "jo"):
-            if params.get("JO") == "제1조":
+        if endpoint_url == self.service_url and params.get("MST") and params.get("JO") and target in ("law", "lawjosub"):
+            if params.get("JO") == "000100":
                 return {
                     "조문": {
                         "조문단위": [
@@ -80,11 +80,18 @@ class NlicApiWrapperTests(unittest.TestCase):
 
         self.assertEqual(article["law_id"], "L1")
         self.assertEqual(article["article_no"], "제1조")
+        self.assertEqual(article["article_candidates"], ["제1조", "000100"])
         self.assertTrue(article["found"])
         self.assertIn("제1조(목적)", article["article_text"])
-        self.assertTrue(article["matched_via"])
+        self.assertEqual(article["matched_via"], "service:law:mst")
         self.assertGreater(len(article["attempted_queries"]), 0)
         self.assertTrue(validated["is_valid"])
+
+    def test_article_no_candidates_include_official_jo_code(self):
+        self.assertEqual(
+            NlicApiWrapper._article_no_candidates("제10조의2"),
+            ("제10조의2", "001002", "001000"),
+        )
 
     def test_get_article_does_not_pick_unrelated_content_field(self):
         api = FakeNlicApiWrapper()
