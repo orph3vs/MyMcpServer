@@ -15,6 +15,8 @@ python -m src.mcp_stdio_server
 노출되는 tool:
 - `ask`
   - 입력: `user_query`, `context?`, `request_id?`
+- `answer_with_citations`
+  - 입력: `user_query`, `context?`, `request_id?`
 - `search_law`
   - 입력: `query`
 - `get_article`
@@ -26,6 +28,8 @@ python -m src.mcp_stdio_server
 
 설계 원칙:
 - `/tools/*` HTTP 엔드포인트와 동일한 기능을 MCP tool로 노출합니다.
+- `ask`와 `answer_with_citations`는 같은 파이프라인을 호출합니다.
+- `answer_with_citations`는 모델 자동선택을 돕기 위한 법률 Q&A용 대표 alias입니다.
 - `/ask`는 요약된 citation 구조를 반환합니다.
 - 원본 API payload가 필요하면 `search_law`, `get_article`, `get_version`, `validate_article`를 직접 호출합니다.
 

@@ -13,6 +13,8 @@ Transport:
 from __future__ import annotations
 
 import json
+import time
+from pathlib import Path
 import sys
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional
@@ -27,6 +29,16 @@ SUPPORTED_PROTOCOL_VERSIONS = (
     "2025-06-18",
     "2025-11-25",
 )
+LOG_PATH = Path(__file__).resolve().parent.parent / "data" / "mcp_stdio_server.log"
+
+
+def _log(message: str) -> None:
+    try:
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message.rstrip()}\n")
+    except Exception:
+        pass
 
 
 class McpProtocolError(RuntimeError):
@@ -39,9 +51,17 @@ class McpProtocolError(RuntimeError):
 
 class McpServer:
     def __init__(self, pipeline: Optional[RequestPipeline] = None) -> None:
-        self.pipeline = pipeline or RequestPipeline()
+        self._pipeline = pipeline
         self.initialized = False
         self.negotiated_protocol_version: Optional[str] = None
+
+    @property
+    def pipeline(self) -> RequestPipeline:
+        if self._pipeline is None:
+            _log("pipeline_init_start")
+            self._pipeline = RequestPipeline()
+            _log("pipeline_init_done")
+        return self._pipeline
 
     def _server_info(self) -> Dict[str, str]:
         return {"name": "MyMcpServer", "version": "0.1.0"}
@@ -50,12 +70,48 @@ class McpServer:
         return [
             {
                 "name": "ask",
-                "description": "Run the full legal review pipeline with citations and confidence metadata.",
+                "description": (
+                    "Primary tool for answering Korean legal questions using 국가법령정보센터 evidence. "
+                    "Use this first for natural-language questions about laws, articles, definitions, compliance, "
+                    "or legal explanation requests. Returns an answer plus summarized citations."
+                ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "user_query": {"type": "string", "description": "Natural-language legal question."},
-                        "context": {"type": "string", "description": "Optional extra context or 기준시점."},
+                        "user_query": {
+                            "type": "string",
+                            "description": (
+                                "Natural-language legal question in Korean. Examples: "
+                                "'개인정보 보호법 제1조 설명해줘', '개인정보 제3자 제공 기준 알려줘'."
+                            ),
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": "Optional extra context such as 기준시점, company situation, or prior facts.",
+                        },
+                        "request_id": {"type": "string", "description": "Optional caller-supplied request id."},
+                    },
+                    "required": ["user_query"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "answer_with_citations",
+                "description": (
+                    "Alias of ask. Prefer this tool for end-user legal Q&A when you want a grounded answer with citations "
+                    "instead of raw law records."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "user_query": {
+                            "type": "string",
+                            "description": "Natural-language Korean legal question.",
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": "Optional extra context such as 기준시점, company facts, or constraints.",
+                        },
                         "request_id": {"type": "string", "description": "Optional caller-supplied request id."},
                     },
                     "required": ["user_query"],
@@ -64,7 +120,10 @@ class McpServer:
             },
             {
                 "name": "search_law",
-                "description": "Search laws by query text via 국가법령정보센터.",
+                "description": (
+                    "Search laws by query text via 국가법령정보센터. Use when you need raw search hits or to identify a law_id "
+                    "before calling get_article or get_version."
+                ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -76,7 +135,10 @@ class McpServer:
             },
             {
                 "name": "get_article",
-                "description": "Fetch the text of a specific article from a law.",
+                "description": (
+                    "Fetch the text of a specific article from a law. Use when law_id and article number are already known "
+                    "and raw article text is needed."
+                ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -89,7 +151,9 @@ class McpServer:
             },
             {
                 "name": "get_version",
-                "description": "Fetch version metadata such as 시행일자 and 공포일자 for a law.",
+                "description": (
+                    "Fetch version metadata such as 시행일자 and 공포일자 for a law. Use for date-sensitive legal questions."
+                ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -101,7 +165,9 @@ class McpServer:
             },
             {
                 "name": "validate_article",
-                "description": "Check whether a given law/article pair resolves to an actual article text.",
+                "description": (
+                    "Check whether a given law/article pair resolves to an actual article text. Use for validation or guardrails."
+                ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -163,6 +229,7 @@ class McpServer:
 
         self.negotiated_protocol_version = negotiated
         self.initialized = False
+        _log(f"initialize requested={requested} negotiated={negotiated}")
         return self._jsonrpc_result(
             request_id,
             {
@@ -178,6 +245,7 @@ class McpServer:
 
     def _handle_tools_list(self, request_id: Any) -> Dict[str, Any]:
         self._ensure_ready()
+        _log("tools/list")
         return self._jsonrpc_result(request_id, {"tools": self._tool_definitions()})
 
     def _handle_tools_call(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -189,9 +257,10 @@ class McpServer:
             raise McpProtocolError(-32602, "Tool name is required")
         if not isinstance(arguments, dict):
             raise McpProtocolError(-32602, "Tool arguments must be an object")
+        _log(f"tools/call name={tool_name}")
 
         try:
-            if tool_name == "ask":
+            if tool_name in ("ask", "answer_with_citations"):
                 result = self.pipeline.process(
                     PipelineRequest(
                         user_query=self._require_string(arguments, "user_query"),
@@ -246,6 +315,7 @@ class McpServer:
         if method == "notifications/initialized":
             self._ensure_ready()
             self.initialized = True
+            _log("notifications/initialized")
             return None
         if method == "tools/list":
             return self._handle_tools_list(request_id)
@@ -290,17 +360,21 @@ def _write_message(stream, message: Dict[str, Any]) -> None:
 
 def serve_forever(server: Optional[McpServer] = None) -> None:
     app = server or McpServer()
+    _log("server_start")
     while True:
         try:
             message = _read_message(sys.stdin.buffer)
             if message is None:
+                _log("server_eof")
                 return
             response = app.handle_message(message)
             if response is not None:
                 _write_message(sys.stdout.buffer, response)
         except McpProtocolError as exc:
+            _log(f"protocol_error code={exc.code} message={exc.message}")
             _write_message(sys.stdout.buffer, McpServer._jsonrpc_error(None, exc.code, exc.message, exc.data))
         except KeyboardInterrupt:
+            _log("server_keyboard_interrupt")
             return
 
 

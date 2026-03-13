@@ -57,6 +57,7 @@ class McpServerTests(unittest.TestCase):
         )
         tool_names = [tool["name"] for tool in list_response["result"]["tools"]]
         self.assertIn("ask", tool_names)
+        self.assertIn("answer_with_citations", tool_names)
         self.assertIn("get_article", tool_names)
 
     def test_tools_call_ask(self):
@@ -81,6 +82,28 @@ class McpServerTests(unittest.TestCase):
         payload = json.loads(response["result"]["content"][0]["text"])
         self.assertEqual(payload["answer"], "테스트 답변")
         self.assertEqual(payload["citations"]["law_search"]["used_search_query"], "개인정보 보호법")
+
+    def test_tools_call_answer_with_citations_alias(self):
+        self.server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}},
+            }
+        )
+        response = self.server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "answer_with_citations", "arguments": {"user_query": "개인정보 보호법 제1조 설명"}},
+            }
+        )
+
+        self.assertFalse(response["result"]["isError"])
+        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertEqual(payload["answer"], "테스트 답변")
 
     def test_tools_call_missing_argument_returns_tool_error(self):
         self.server.handle_message(
