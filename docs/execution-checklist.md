@@ -55,3 +55,20 @@ curl -X POST http://localhost:8000/ask \
 - Git Bash/명령프롬프트에서 한글 JSON 전송 시 인코딩 충돌이 날 수 있습니다.
 - 이 서버는 `utf-8`, `utf-8-sig`, `cp949`, `euc-kr` 요청 바디를 자동 처리합니다.
 - 그래도 문제가 있으면 PowerShell의 `Invoke-RestMethod` 사용을 권장합니다.
+
+
+## 5) Tool 엔드포인트 확인(선택)
+```bash
+curl -X POST http://localhost:8000/tools/search_law \
+  -H "Content-Type: application/json" \
+  -d '{"query":"개인정보보호법"}'
+
+```
+
+```bash
+curl "http://localhost:8000/logs/recent?limit=5"
+```
+
+정상 기준:
+- `tools/*`는 `{"data": ...}` 형태
+- `/logs/recent`는 `{"count": n, "items": [...]}` 형태

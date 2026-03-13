@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from src.http_server import parse_ask_request
+from src.http_server import parse_ask_request, parse_recent_limit, parse_tool_request
 
 
 class HttpServerParsingTests(unittest.TestCase):
@@ -46,6 +46,17 @@ class HttpServerParsingTests(unittest.TestCase):
         self.assertIn("[METADATA]", req.context or "")
         self.assertIn("tenant", req.context or "")
         self.assertIn("[RECENT_HISTORY]", req.context or "")
+
+    def test_parse_tool_request(self):
+        fields = parse_tool_request(
+            json.dumps({"law_id": "L1", "article_no": "제1조"}).encode("utf-8"),
+            ("law_id", "article_no"),
+        )
+        self.assertEqual(fields["law_id"], "L1")
+
+    def test_parse_recent_limit(self):
+        self.assertEqual(parse_recent_limit("/logs/recent?limit=7"), 7)
+        self.assertEqual(parse_recent_limit("/logs/recent?limit=1000"), 100)
 
     def test_parse_ask_request_missing_query(self):
         with self.assertRaises(ValueError):

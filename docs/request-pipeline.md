@@ -41,3 +41,11 @@ User
 - 실제 사용에서는 사용자가 `context`를 직접 넣지 않아도 됩니다.
 - `/ask` 요청의 `metadata`(dict), `history`(list)를 서버가 받아 내부 `context`로 자동 조립합니다.
 - `context`를 함께 보내면 자동 조립 결과에 포함됩니다.
+
+
+## 부가 엔드포인트
+- `POST /tools/search_law`
+- `POST /tools/get_article`
+- `POST /tools/get_version`
+- `POST /tools/validate_article`
+- `GET /logs/recent?limit=10`
