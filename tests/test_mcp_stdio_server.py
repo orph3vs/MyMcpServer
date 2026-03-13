@@ -79,9 +79,11 @@ class McpServerTests(unittest.TestCase):
         )
 
         self.assertFalse(response["result"]["isError"])
-        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertIn("structuredContent", response["result"])
+        payload = response["result"]["structuredContent"]
         self.assertEqual(payload["answer"], "테스트 답변")
         self.assertEqual(payload["citations"]["law_search"]["used_search_query"], "개인정보 보호법")
+        self.assertIn("테스트 답변", response["result"]["content"][0]["text"])
 
     def test_tools_call_answer_with_citations_alias(self):
         self.server.handle_message(
@@ -102,7 +104,7 @@ class McpServerTests(unittest.TestCase):
         )
 
         self.assertFalse(response["result"]["isError"])
-        payload = json.loads(response["result"]["content"][0]["text"])
+        payload = response["result"]["structuredContent"]
         self.assertEqual(payload["answer"], "테스트 답변")
 
     def test_tools_call_missing_argument_returns_tool_error(self):

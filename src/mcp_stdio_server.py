@@ -195,9 +195,58 @@ class McpServer:
     def _tool_text(payload: Dict[str, Any]) -> str:
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
-    def _tool_success(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    @staticmethod
+    def _tool_summary(tool_name: str, payload: Dict[str, Any]) -> str:
+        if tool_name in ("ask", "answer_with_citations"):
+            answer = str(payload.get("answer", "")).strip()
+            citations = payload.get("citations") or {}
+            law_context = citations.get("law_context") or {}
+            primary_law = law_context.get("primary_law") or {}
+            article = law_context.get("article") or {}
+            lines = []
+            if answer:
+                lines.append(answer)
+            if primary_law.get("law_name"):
+                lines.append(f"[근거 법령] {primary_law['law_name']} ({primary_law.get('law_id', '-')})")
+            if article.get("article_no"):
+                lines.append(f"[관련 조문] {article['article_no']}")
+            return "\n".join(lines).strip() or McpServer._tool_text(payload)
+
+        if tool_name == "search_law":
+            items = []
+            for item in (payload.get("LawSearch", {}).get("law") or [])[:5]:
+                if isinstance(item, dict):
+                    law_name = item.get("법령명한글") or item.get("법령명_한글") or "-"
+                    law_id = item.get("법령ID") or "-"
+                    items.append(f"- {law_name} ({law_id})")
+            return "법령 검색 결과\n" + "\n".join(items) if items else McpServer._tool_text(payload)
+
+        if tool_name == "get_article":
+            article_no = payload.get("article_no") or "-"
+            article_text = str(payload.get("article_text", "")).strip()
+            return f"{article_no}\n{article_text}".strip() or McpServer._tool_text(payload)
+
+        if tool_name == "get_version":
+            version_fields = payload.get("version_fields") or {}
+            lines = ["법령 버전 정보"]
+            if version_fields.get("시행일자"):
+                lines.append(f"- 시행일자: {version_fields['시행일자']}")
+            if version_fields.get("공포일자"):
+                lines.append(f"- 공포일자: {version_fields['공포일자']}")
+            if version_fields.get("제개정구분명"):
+                lines.append(f"- 제개정구분: {version_fields['제개정구분명']}")
+            return "\n".join(lines) if len(lines) > 1 else McpServer._tool_text(payload)
+
+        if tool_name == "validate_article":
+            return f"조문 유효성: {'true' if payload.get('is_valid') else 'false'}"
+
+        return McpServer._tool_text(payload)
+
+    def _tool_success(self, tool_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        summary = self._tool_summary(tool_name, payload)
         return {
-            "content": [{"type": "text", "text": self._tool_text(payload)}],
+            "content": [{"type": "text", "text": summary}],
+            "structuredContent": payload,
             "isError": False,
         }
 
@@ -207,6 +256,7 @@ class McpServer:
             payload["data"] = data
         return {
             "content": [{"type": "text", "text": self._tool_text(payload)}],
+            "structuredContent": payload,
             "isError": True,
         }
 
@@ -294,7 +344,7 @@ class McpServer:
         except Exception as exc:  # defensive wrapper for tool execution
             return self._jsonrpc_result(request_id, self._tool_failure("tool_execution_failed", {"detail": str(exc)}))
 
-        return self._jsonrpc_result(request_id, self._tool_success(payload))
+        return self._jsonrpc_result(request_id, self._tool_success(tool_name, payload))
 
     def handle_message(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(message, dict):
