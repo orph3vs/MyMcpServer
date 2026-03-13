@@ -9,8 +9,8 @@
 - `validate_article(law_id, article_no)`
 
 ## OC 값
-- 기본 OC 값은 `orph3vs_mcpserver`로 설정되어 있습니다.
-- 필요 시 초기화 인자로 다른 값을 주입할 수 있습니다.
+- OC 값은 코드/문서에 하드코딩하지 않습니다.
+- 실행 시 환경변수 `NLIC_OC`로 주입하거나 초기화 인자 `oc`로 전달합니다.
 
 ## 캐시
 - 메모리 TTL 캐시 사용 (`cache_ttl_seconds`, 기본 300초)

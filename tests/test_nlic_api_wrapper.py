@@ -5,7 +5,7 @@ from src.nlic_api_wrapper import NlicApiWrapper
 
 class FakeNlicApiWrapper(NlicApiWrapper):
     def __init__(self):
-        super().__init__(oc="orph3vs_mcpserver", cache_ttl_seconds=300)
+        super().__init__(oc="test_oc", cache_ttl_seconds=300)
         self.calls = []
 
     def _request(self, params):

@@ -10,6 +10,7 @@ Implemented features:
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
@@ -30,16 +31,17 @@ class NlicApiWrapper:
 
     def __init__(
         self,
-        oc: str = "orph3vs_mcpserver",
+        oc: Optional[str] = "orph3vs_mcpserver",
         base_url: str = DEFAULT_BASE_URL,
         cache_ttl_seconds: int = 300,
     ) -> None:
-        if not oc:
+        oc_value = oc or os.getenv("NLIC_OC")
+        if not oc_value:
             raise ValueError("oc is required")
         if cache_ttl_seconds <= 0:
             raise ValueError("cache_ttl_seconds must be positive")
 
-        self.oc = oc
+        self.oc = oc_value
         self.base_url = base_url
         self.cache_ttl_seconds = cache_ttl_seconds
         self._cache: Dict[Tuple[str, Tuple[Tuple[str, str], ...]], CacheEntry] = {}
