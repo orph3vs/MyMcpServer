@@ -89,6 +89,30 @@ class NlicApiWrapper:
         self._set_cached(key, result)
         return result
 
+    @staticmethod
+    def _is_blank_raw(result: Dict[str, Any]) -> bool:
+        raw = result.get("raw")
+        return isinstance(raw, str) and not raw.strip()
+
+    @staticmethod
+    def _extract_from_nested(obj: Any, article_no: str) -> Optional[str]:
+        if isinstance(obj, dict):
+            # direct hit
+            for text_key in ("조문내용", "조문", "내용", "text", "article"):
+                txt = obj.get(text_key)
+                if isinstance(txt, str) and txt.strip() and article_no in json.dumps(obj, ensure_ascii=False):
+                    return txt
+            for value in obj.values():
+                hit = NlicApiWrapper._extract_from_nested(value, article_no)
+                if hit:
+                    return hit
+        elif isinstance(obj, list):
+            for item in obj:
+                hit = NlicApiWrapper._extract_from_nested(item, article_no)
+                if hit:
+                    return hit
+        return None
+
     def search_law(self, query: str) -> Dict[str, Any]:
         if not query.strip():
             raise ValueError("query must not be empty")
@@ -97,7 +121,8 @@ class NlicApiWrapper:
     def get_article(self, law_id: str, article_no: str) -> Dict[str, Any]:
         if not law_id.strip() or not article_no.strip():
             raise ValueError("law_id and article_no are required")
-        return self._call(
+
+        source = self._call(
             "law",
             {
                 "ID": law_id.strip(),
@@ -105,28 +130,59 @@ class NlicApiWrapper:
             },
         )
 
+        article_text = self._extract_from_nested(source, article_no.strip())
+        if not article_text:
+            # fallback: known top-level keys (some NLIC responses are flat)
+            for key in ("조문내용", "조문", "article", "raw"):
+                value = source.get(key)
+                if isinstance(value, str) and value.strip():
+                    article_text = value
+                    break
+
+        return {
+            "law_id": law_id.strip(),
+            "article_no": article_no.strip(),
+            "found": bool(article_text),
+            "article_text": article_text,
+            "source": source,
+        }
+
     def get_version(self, law_id: str) -> Dict[str, Any]:
         if not law_id.strip():
             raise ValueError("law_id is required")
-        return self._call("history", {"ID": law_id.strip()})
+
+        history_result = self._call("history", {"ID": law_id.strip()})
+
+        # Some environments return blank raw for target=history.
+        if history_result and not self._is_blank_raw(history_result):
+            return {
+                "law_id": law_id.strip(),
+                "source_target": "history",
+                "data": history_result,
+            }
+
+        # Fallback: derive version metadata from law target.
+        law_result = self._call("law", {"ID": law_id.strip()})
+        version_fields = {}
+        for key in ("시행일자", "공포일자", "제개정구분", "개정문"):
+            if key in law_result:
+                version_fields[key] = law_result.get(key)
+
+        return {
+            "law_id": law_id.strip(),
+            "source_target": "law_fallback",
+            "version_fields": version_fields,
+            "data": law_result,
+        }
 
     def validate_article(self, law_id: str, article_no: str) -> Dict[str, Any]:
         """Validate article existence using get_article result."""
         article_result = self.get_article(law_id=law_id, article_no=article_no)
 
-        # conservative validation: only true when API result clearly has non-empty content.
-        text_candidates = [
-            article_result.get("조문내용"),
-            article_result.get("조문"),
-            article_result.get("article"),
-            article_result.get("raw"),
-        ]
-        found = any(bool(v) for v in text_candidates)
-
         return {
             "law_id": law_id,
             "article_no": article_no,
-            "is_valid": found,
+            "is_valid": bool(article_result.get("found")),
             "source": article_result,
         }
 
