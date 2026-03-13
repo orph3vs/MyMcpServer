@@ -87,9 +87,9 @@ class RequestPipelineTests(unittest.TestCase):
 
             self.assertIsNone(result.error)
             self.assertTrue(result.answer)
-            self.assertIn("law_search_result", result.citations)
-            self.assertIn("law_enrichment", result.citations)
-            self.assertEqual(result.citations["law_enrichment"]["primary_law"]["law_id"], "011357")
+            self.assertIn("law_search", result.citations)
+            self.assertIn("law_context", result.citations)
+            self.assertEqual(result.citations["law_context"]["primary_law"]["law_id"], "011357")
             self.assertGreaterEqual(result.score, 0)
 
             logged = logger.get_by_request_id(result.request_id)
@@ -109,10 +109,10 @@ class RequestPipelineTests(unittest.TestCase):
             )
 
             self.assertIsNone(result.error)
-            self.assertIn("law_enrichment", result.citations)
-            self.assertEqual(result.citations["law_enrichment"]["article"]["article_no"], "제1조")
+            self.assertIn("law_context", result.citations)
+            self.assertEqual(result.citations["law_context"]["article"]["article_no"], "제1조")
             self.assertIn("대표 법령: 개인정보 보호법", result.answer)
-            self.assertIn("조문 본문:", result.answer)
+            self.assertIn("조문 요약:", result.answer)
 
     def test_process_uses_normalized_law_search_query(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -129,8 +129,9 @@ class RequestPipelineTests(unittest.TestCase):
 
             self.assertIsNone(result.error)
             self.assertEqual(law_api.search_queries[0], "개인정보 보호법")
-            self.assertEqual(result.citations["law_enrichment"]["used_search_query"], "개인정보 보호법")
-            self.assertIn("개인정보 보호법", result.citations["law_enrichment"]["search_queries"])
+            self.assertEqual(result.citations["law_context"]["used_search_query"], "개인정보 보호법")
+            self.assertIn("개인정보 보호법", result.citations["law_context"]["search_queries"])
+            self.assertEqual(result.citations["law_search"]["used_search_query"], "개인정보 보호법")
 
     def test_process_error_path_logs(self):
         with tempfile.TemporaryDirectory() as tmp:

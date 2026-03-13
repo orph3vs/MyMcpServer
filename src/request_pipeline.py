@@ -74,6 +74,13 @@ class RequestPipeline:
         return round((tokens_in * 0.0000015) + (tokens_out * 0.000002), 6)
 
     @staticmethod
+    def _truncate_text(text: str, max_chars: int = 140) -> str:
+        compact = re.sub(r"\s+", " ", text).strip()
+        if len(compact) <= max_chars:
+            return compact
+        return compact[: max_chars - 3].rstrip() + "..."
+
+    @staticmethod
     def _extract_law_items(law_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not isinstance(law_data, dict):
             return []
@@ -222,9 +229,66 @@ class RequestPipeline:
         article = enrichment.get("article")
         if isinstance(article, dict) and article.get("found") and article.get("article_text"):
             lines.append(f"관련 조문: {article['article_no']}")
-            lines.append(f"조문 본문: {article['article_text']}")
+            lines.append(f"조문 요약: {RequestPipeline._truncate_text(article['article_text'])}")
 
         return lines
+
+    @staticmethod
+    def _summarize_search_results(law_data: Dict[str, Any], used_search_query: Optional[str]) -> Dict[str, Any]:
+        items = RequestPipeline._extract_law_items(law_data)
+        results = []
+        for item in items[:5]:
+            results.append(
+                {
+                    "law_id": item.get("법령ID") or item.get("id"),
+                    "law_name": item.get("법령명한글") or item.get("법령 명한글") or item.get("법령명_한글"),
+                    "law_type": item.get("법령구분명"),
+                    "effective_date": item.get("시행일자"),
+                    "promulgation_date": item.get("공포일자"),
+                }
+            )
+
+        return {
+            "used_search_query": used_search_query,
+            "search_hit_count": len(items),
+            "results": results,
+        }
+
+    @staticmethod
+    def _summarize_law_enrichment(enrichment: Dict[str, Any]) -> Dict[str, Any]:
+        primary_law = enrichment.get("primary_law") or {}
+        version = enrichment.get("version") or {}
+        version_fields = version.get("version_fields") or {}
+        article = enrichment.get("article") or {}
+
+        article_summary = None
+        if isinstance(article, dict) and article.get("found"):
+            article_summary = {
+                "article_no": article.get("article_no"),
+                "found": True,
+                "matched_via": article.get("matched_via"),
+                "article_text_excerpt": RequestPipeline._truncate_text(str(article.get("article_text", "")), 180),
+            }
+
+        return {
+            "search_queries": enrichment.get("search_queries", []),
+            "used_search_query": enrichment.get("used_search_query"),
+            "primary_law": {
+                "law_id": primary_law.get("law_id"),
+                "law_name": primary_law.get("law_name"),
+            }
+            if primary_law
+            else None,
+            "version": {
+                "source_target": version.get("source_target"),
+                "effective_date": version_fields.get("시행일자"),
+                "promulgation_date": version_fields.get("공포일자"),
+                "revision_type": version_fields.get("제개정구분명") or version_fields.get("제개정구분"),
+            }
+            if version
+            else None,
+            "article": article_summary,
+        }
 
     def process(self, req: PipelineRequest) -> PipelineResponse:
         request_id = req.request_id or str(uuid.uuid4())
@@ -277,8 +341,8 @@ class RequestPipeline:
 
             # 5) Validator
             citations = {
-                "law_search_result": law_data,
-                "law_enrichment": law_enrichment,
+                "law_search": self._summarize_search_results(law_data, used_search_query),
+                "law_context": self._summarize_law_enrichment(law_enrichment),
             }
             self._validate(answer=answer, citations=citations)
 
