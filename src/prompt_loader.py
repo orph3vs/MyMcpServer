@@ -1,13 +1,14 @@
 """Prompt loader for MCP request-time prompt composition.
 
 This module separates system and orchestration prompts into versioned config files,
-and combines them automatically per request.
+combines them automatically per request, and exposes lightweight prompt-policy
+extraction so downstream modules can apply the prompt rules deterministically.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, Optional
@@ -103,6 +104,19 @@ class PromptLoader:
         }
 
 
+@dataclass(frozen=True)
+class PromptPolicy:
+    grounded_only: bool
+    suppress_unsupported_claims: bool
+    avoid_generalization: bool
+    require_confirmation_when_unclear: bool
+    require_evidence_mapping: bool
+    prefer_multi_agent_for_risky_queries: bool
+
+    def as_dict(self) -> Dict[str, bool]:
+        return asdict(self)
+
+
 _default_loader = PromptLoader()
 
 
@@ -116,4 +130,19 @@ def build_request_prompt(
         user_query=user_query,
         version=version,
         context=context,
+    )
+
+
+def extract_prompt_policy(prompt_payload: Dict[str, str]) -> PromptPolicy:
+    combined = " ".join(
+        part.strip() for part in (prompt_payload.get("system", ""), prompt_payload.get("user", "")) if part
+    )
+    lowered = combined.lower()
+    return PromptPolicy(
+        grounded_only=("법령 원문 근거" in combined) or ("grounded" in lowered),
+        suppress_unsupported_claims=("근거가 없는 문장" in combined) or ("unsupported" in lowered),
+        avoid_generalization=("일반화" in combined) or ("generalization" in lowered),
+        require_confirmation_when_unclear=("확인 필요" in combined) or ("불명확" in combined),
+        require_evidence_mapping=("근거-주장 매핑" in combined) or ("evidence" in lowered),
+        prefer_multi_agent_for_risky_queries=("자동 고위험" in combined) or ("multi-agent" in lowered),
     )

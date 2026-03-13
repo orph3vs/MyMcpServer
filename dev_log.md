@@ -273,3 +273,6 @@
 - 2026-03-13: Multi-agent review now emits structured caution/relevance signals and marks high-risk conflicts conservatively.
 - 2026-03-13: Request pipeline now exposes `review_summary` in citations and passes review signals into final answer composition.
 - 2026-03-13: Full test suite passed again after review/precedent upgrades (`Ran 58 tests`, `OK`).
+- 2026-03-13: Prompt files were upgraded to reflect statute-first, precedent-as-support, conflict-aware, evidence-mapped answer rules.
+- 2026-03-13: Prompt policy extraction is now applied in the request pipeline for mode selection, validation, and response citations.
+- 2026-03-13: Full test suite passed after prompt integration (`Ran 59 tests`, `OK`).

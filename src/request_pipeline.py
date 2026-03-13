@@ -13,7 +13,7 @@ from src.confidence_scoring import ConfidenceInput, ConfidenceScoringEngine
 from src.cost_logger import CostLogEntry, CostLogger
 from src.multi_agent_review import MultiAgentReviewPipeline
 from src.nlic_api_wrapper import NlicApiWrapper
-from src.prompt_loader import build_request_prompt
+from src.prompt_loader import build_request_prompt, extract_prompt_policy
 from src.risk_classifier import RiskClassifier
 
 
@@ -83,6 +83,13 @@ class RequestPipeline:
             raise PipelineStageError("Validator", "empty_answer")
         if not citations:
             raise PipelineStageError("Validator", "missing_citations")
+        prompt_policy = citations.get("prompt_policy") or {}
+        if prompt_policy.get("require_evidence_mapping"):
+            law_context = citations.get("law_context") or {}
+            has_primary_law = bool((law_context.get("primary_law") or {}).get("law_name"))
+            has_article = bool(law_context.get("article"))
+            if not (has_primary_law or has_article):
+                raise PipelineStageError("Validator", "missing_grounded_context")
 
     def _estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
         return round((tokens_in * 0.0000015) + (tokens_out * 0.000002), 6)
@@ -478,11 +485,18 @@ class RequestPipeline:
         try:
             risk = self.risk_classifier.classify(req.user_query)
             risk_level = risk.risk_level
-            mode = "multi_agent" if risk_level == "HIGH" else "single_agent"
 
             prompt_payload = build_request_prompt(user_query=req.user_query, context=req.context)
             if not prompt_payload.get("system") or not prompt_payload.get("user"):
                 raise PipelineStageError("PromptBuilder", "invalid_prompt_payload")
+            prompt_policy = extract_prompt_policy(prompt_payload)
+
+            intent = self._question_intent(req.user_query)
+            mode = "multi_agent" if risk_level == "HIGH" else "single_agent"
+            if prompt_policy.prefer_multi_agent_for_risky_queries and (
+                risk_level == "HIGH" or intent in {"illegality", "applicability"}
+            ):
+                mode = "multi_agent"
 
             search_queries = self._law_search_queries(req.user_query)
             law_data: Dict[str, Any] = {}
@@ -504,6 +518,7 @@ class RequestPipeline:
             )
             law_enrichment["search_queries"] = search_queries
             law_enrichment["used_search_query"] = used_search_query
+            law_enrichment["prompt_policy"] = prompt_policy.as_dict()
             enriched_context = self._merge_context(req.context, self._law_context_lines(law_enrichment))
 
             agent_result = self.agent_engine.run(
@@ -528,6 +543,7 @@ class RequestPipeline:
                 "law_search": self._summarize_search_results(law_data, used_search_query),
                 "law_context": self._summarize_law_enrichment(law_enrichment),
                 "review_summary": agent_result.review_summary,
+                "prompt_policy": prompt_policy.as_dict(),
             }
             self._validate(answer=answer, citations=citations)
 

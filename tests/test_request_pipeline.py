@@ -131,9 +131,11 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertIn("law_search", result.citations)
             self.assertIn("law_context", result.citations)
             self.assertIn("review_summary", result.citations)
+            self.assertIn("prompt_policy", result.citations)
             self.assertEqual(result.citations["law_context"]["primary_law"]["law_id"], "011357")
             self.assertEqual(result.mode, "multi_agent")
             self.assertGreaterEqual(result.score, 0)
+            self.assertTrue(result.citations["prompt_policy"]["require_evidence_mapping"])
 
             logged = logger.get_by_request_id(result.request_id)
             self.assertIsNotNone(logged)
@@ -263,6 +265,23 @@ class RequestPipelineTests(unittest.TestCase):
             self.assertTrue(law_api.precedent_queries)
             self.assertEqual(result.mode, "single_agent")
             self.assertIn("[참고 판례]", result.answer)
+
+    def test_process_uses_prompt_policy_to_keep_illegality_in_multi_agent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = CostLogger(db_path=str(Path(tmp) / "cost_logs.db"))
+            law_api = FakeLawApiOk()
+            pipeline = RequestPipeline(law_api=law_api, logger=logger)
+
+            result = pipeline.process(
+                PipelineRequest(
+                    user_query="개인정보 보호법 제15조가 위법 판단 기준인지 설명해줘",
+                    context="기준시점: 2025-01-01",
+                )
+            )
+
+            self.assertIsNone(result.error)
+            self.assertEqual(result.mode, "multi_agent")
+            self.assertTrue(result.citations["prompt_policy"]["prefer_multi_agent_for_risky_queries"])
 
     def test_process_error_path_logs(self):
         with tempfile.TemporaryDirectory() as tmp:
